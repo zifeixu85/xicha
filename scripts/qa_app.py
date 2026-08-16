@@ -25,6 +25,8 @@ with sync_playwright() as playwright:
     desktop.get_by_role("button", name="再摇一杯").click()
     desktop.wait_for_timeout(650)
     assert desktop.locator(".recipe-card h2").inner_text() != original_name
+    desktop.locator(".ai-blessing--ready").wait_for(timeout=15000)
+    assert len(desktop.locator(".ai-blessing p").inner_text()) >= 10
 
     desktop.get_by_role("button", name="收藏配方").click()
     assert "已暂存" in desktop.locator(".toast").inner_text()
@@ -55,6 +57,7 @@ with sync_playwright() as playwright:
     mobile.get_by_role("button", name="晚间 0 咖").click()
     mobile.wait_for_timeout(650)
     assert "0 咖乳饮" in mobile.locator(".category-stamp").inner_text()
+    mobile.locator(".ai-blessing--ready").wait_for(timeout=15000)
     overflow = mobile.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
     assert overflow <= 1, f"mobile horizontal overflow: {overflow}px"
     mobile.screenshot(path="/tmp/heytea-mobile.png", full_page=True)

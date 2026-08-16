@@ -4,9 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node server.mjs",
     "build": "vite build",
-    "preview": "vite preview",
+    "start": "NODE_ENV=production node server.mjs",
+    "preview": "npm run start",
     "db:migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
@@ -14,6 +15,7 @@
     "@neondatabase/serverless": "^1.1.0",
     "@vitejs/plugin-react": "latest",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
