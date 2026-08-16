@@ -5,6 +5,7 @@ from playwright.sync_api import sync_playwright
 def collect_console(page, bucket):
     page.on("console", lambda message: bucket.append(f"console:{message.type}:{message.text}") if message.type == "error" else None)
     page.on("pageerror", lambda error: bucket.append(f"pageerror:{error}"))
+    page.on("response", lambda response: bucket.append(f"response:{response.status}:{response.url}") if response.status >= 400 else None)
 
 
 with sync_playwright() as playwright:
@@ -26,7 +27,20 @@ with sync_playwright() as playwright:
     assert desktop.locator(".recipe-card h2").inner_text() != original_name
 
     desktop.get_by_role("button", name="收藏配方").click()
-    assert "已经记进小本本" in desktop.locator(".toast").inner_text()
+    assert "已暂存" in desktop.locator(".toast").inner_text()
+    desktop.wait_for_timeout(450)
+    assert desktop.locator(".auth-panel, .auth-setup").is_visible()
+    if desktop.locator(".auth-panel").is_visible():
+        assert desktop.locator(".auth-panel input").count() == 2
+        assert desktop.locator(".auth-tabs button").count() == 2
+    else:
+        assert desktop.locator(".auth-setup code").count() == 2
+    desktop.locator(".sheet__close").click()
+    desktop.get_by_role("button", name="登录同步收藏").click()
+    assert desktop.locator(".auth-panel, .auth-setup").is_visible()
+    desktop.wait_for_timeout(500)
+    desktop.screenshot(path="/tmp/heytea-auth-setup.png", full_page=False)
+    desktop.locator(".sheet__close").click()
     desktop.get_by_role("button", name="资料说明").click()
     assert desktop.locator(".source-list a").count() == 5
     desktop.locator(".sheet__close").click()

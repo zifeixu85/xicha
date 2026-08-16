@@ -6,14 +6,28 @@ import {
   Check,
   ChevronRight,
   Clipboard,
+  Cloud,
+  CloudOff,
   Heart,
   Info,
-  MapPin,
+  LoaderCircle,
+  LockKeyhole,
+  LogOut,
+  Mail,
   RotateCcw,
   Share2,
   Sparkles,
+  UserRound,
   X,
 } from "lucide-react";
+import {
+  addFavorite,
+  deleteFavorite,
+  fetchFavoriteIds,
+  mergeGuestFavorites,
+  neonClient,
+  neonConfigured,
+} from "./neon";
 import { categoryMeta, recipes, sources } from "./recipes";
 import "./styles.css";
 
@@ -30,6 +44,123 @@ const pickRandom = (items, currentId) => {
   return available[Math.floor(Math.random() * available.length)];
 };
 
+const GUEST_FAVORITES_KEY = "heytea-saved-guest";
+const LEGACY_FAVORITES_KEY = "heytea-saved";
+
+const readGuestFavorites = () => {
+  try {
+    return JSON.parse(
+      localStorage.getItem(GUEST_FAVORITES_KEY)
+      || localStorage.getItem(LEGACY_FAVORITES_KEY)
+      || "[]",
+    );
+  } catch {
+    return [];
+  }
+};
+
+const friendlyAuthError = (error) => {
+  const code = error?.code || "";
+  if (code.includes("INVALID") || code.includes("PASSWORD")) return "邮箱或密码不正确，请再试一次。";
+  if (code.includes("EXISTS")) return "这个邮箱已经注册，可以直接登录。";
+  if (code.includes("RATE") || code.includes("MANY")) return "尝试次数太多，请稍后再试。";
+  return error?.message || "认证没有成功，请稍后再试。";
+};
+
+function AuthPanel({ user, syncing, onAuthenticated, onSignedOut }) {
+  const [mode, setMode] = useState("sign-in");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  if (!neonConfigured) {
+    return (
+      <div className="auth-setup">
+        <div className="auth-setup__cloud"><CloudOff size={30} /></div>
+        <h2>还差两根连接线</h2>
+        <p>登录界面已经做好。请先在 Neon 项目中开启 Auth 与 Data API，再把两个公开 URL 放进本地环境变量。</p>
+        <code>VITE_NEON_AUTH_URL</code>
+        <code>VITE_NEON_DATA_API_URL</code>
+        <div className="notice"><Info size={18} /><span>数据库密码只用于本地迁移的 <b>DATABASE_URL</b>，不会进入浏览器代码。</span></div>
+      </div>
+    );
+  }
+
+  if (user) {
+    return (
+      <div className="account-panel">
+        <div className="account-panel__avatar">{(user.name || user.email || "喜").slice(0, 1).toUpperCase()}</div>
+        <span className="eyebrow"><Cloud size={15} /> CLOUD NOTEBOOK</span>
+        <h2>{user.name || "灵感收藏家"}</h2>
+        <p>{user.email}</p>
+        <div className="sync-status">
+          {syncing ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}
+          <span><b>{syncing ? "正在同步收藏" : "收藏已跟随账号保存"}</b><small>换一台设备登录，也能看到同一本小本本</small></span>
+        </div>
+        <button className="signout-button" onClick={async () => {
+          await neonClient.auth.signOut();
+          onSignedOut();
+        }}><LogOut size={17} />退出登录</button>
+      </div>
+    );
+  }
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      const response = mode === "sign-up"
+        ? await neonClient.auth.signUp.email({ email, password, name })
+        : await neonClient.auth.signIn.email({ email, password });
+
+      if (response?.error) throw response.error;
+      const current = await neonClient.auth.getSession();
+      if (current.data) {
+        onAuthenticated();
+      } else {
+        setSuccess("账号已创建，请按邮件提示完成验证后再登录。");
+        setMode("sign-in");
+      }
+    } catch (authError) {
+      setError(friendlyAuthError(authError));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-panel">
+      <span className="eyebrow"><Cloud size={15} /> SYNC YOUR PICKS</span>
+      <h2>{mode === "sign-in" ? "欢迎回来，喝点什么？" : "领一本云端小本本"}</h2>
+      <p className="sheet__lead">登录后，收藏会安全地保存在你的 Neon 账号中，并自动合并这台设备上的临时收藏。</p>
+      <div className="auth-tabs">
+        <button className={mode === "sign-in" ? "active" : ""} onClick={() => { setMode("sign-in"); setError(""); }}>登录</button>
+        <button className={mode === "sign-up" ? "active" : ""} onClick={() => { setMode("sign-up"); setError(""); }}>注册</button>
+      </div>
+      <form onSubmit={submit}>
+        {mode === "sign-up" && (
+          <label><span><UserRound size={15} />昵称</span><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="怎么称呼你" autoComplete="name" /></label>
+        )}
+        <label><span><Mail size={15} />邮箱</span><input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" autoComplete="email" /></label>
+        <label><span><LockKeyhole size={15} />密码</span><input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位" autoComplete={mode === "sign-up" ? "new-password" : "current-password"} /></label>
+        {error && <p className="auth-message auth-message--error">{error}</p>}
+        {success && <p className="auth-message auth-message--success">{success}</p>}
+        <button className="auth-submit" disabled={loading} type="submit">
+          {loading ? <LoaderCircle className="spin" size={18} /> : <Cloud size={18} />}
+          {loading ? "稍等，正在确认…" : mode === "sign-in" ? "登录并同步收藏" : "创建我的小本本"}
+        </button>
+      </form>
+      <p className="auth-fineprint">由 Neon Auth 提供账号与会话服务 · 密码不会经过本应用数据库表</p>
+    </div>
+  );
+}
+
 function Splash({ hiding }) {
   return (
     <div className={`splash ${hiding ? "splash--hide" : ""}`} aria-hidden="true">
@@ -40,21 +171,17 @@ function Splash({ hiding }) {
   );
 }
 
-function App() {
+function App({ auth }) {
   const [mood, setMood] = useState("all");
   const [recipe, setRecipe] = useState(() => pickRandom(recipes));
   const [rolling, setRolling] = useState(false);
   const [intro, setIntro] = useState(true);
   const [sheet, setSheet] = useState(null);
   const [toast, setToast] = useState("");
-  const [saved, setSaved] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("heytea-saved") || "[]");
-    } catch {
-      return [];
-    }
-  });
+  const [saved, setSaved] = useState(readGuestFavorites);
+  const [syncing, setSyncing] = useState(false);
   const toastTimer = useRef(null);
+  const user = auth.session?.user || null;
 
   const meta = categoryMeta[recipe.category];
   const pool = useMemo(
@@ -69,8 +196,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("heytea-saved", JSON.stringify(saved));
-  }, [saved]);
+    if (!user && !auth.isPending) {
+      localStorage.setItem(GUEST_FAVORITES_KEY, JSON.stringify(saved));
+      localStorage.removeItem(LEGACY_FAVORITES_KEY);
+    }
+  }, [saved, user, auth.isPending]);
 
   useEffect(() => {
     const onKey = (event) => {
@@ -86,6 +216,41 @@ function App() {
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(""), 1900);
   };
+
+  useEffect(() => {
+    if (auth.isPending) return undefined;
+
+    if (!user) {
+      setSaved(readGuestFavorites());
+      setSyncing(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const syncFavorites = async () => {
+      setSyncing(true);
+      const guestFavorites = readGuestFavorites();
+      try {
+        const remoteFavorites = guestFavorites.length
+          ? await mergeGuestFavorites(guestFavorites)
+          : await fetchFavoriteIds();
+        if (!cancelled) {
+          setSaved(remoteFavorites);
+          localStorage.removeItem(GUEST_FAVORITES_KEY);
+          localStorage.removeItem(LEGACY_FAVORITES_KEY);
+          if (guestFavorites.length) notify("本机收藏已经合并到云端");
+        }
+      } catch (syncError) {
+        console.error("Failed to sync Neon favorites", syncError);
+        if (!cancelled) notify("云端小本本暂时连不上，请检查 Neon 配置");
+      } finally {
+        if (!cancelled) setSyncing(false);
+      }
+    };
+
+    syncFavorites();
+    return () => { cancelled = true; };
+  }, [user?.id, auth.isPending]);
 
   const roll = (nextMood = mood) => {
     if (rolling) return;
@@ -121,9 +286,29 @@ function App() {
     notify("今日灵感已复制");
   };
 
-  const toggleSaved = () => {
-    setSaved((items) => isSaved ? items.filter((id) => id !== recipe.id) : [...items, recipe.id]);
-    notify(isSaved ? "已从小本本移除" : "已经记进小本本");
+  const toggleSaved = async () => {
+    const previous = saved;
+    const next = isSaved
+      ? saved.filter((id) => id !== recipe.id)
+      : [...saved, recipe.id];
+    setSaved(next);
+
+    if (!user) {
+      localStorage.setItem(GUEST_FAVORITES_KEY, JSON.stringify(next));
+      notify(isSaved ? "已从临时小本本移除" : "已暂存，登录后可以跨设备同步");
+      if (!isSaved) window.setTimeout(() => setSheet("auth"), 320);
+      return;
+    }
+
+    try {
+      if (isSaved) await deleteFavorite(recipe.id);
+      else await addFavorite(recipe.id);
+      notify(isSaved ? "已从云端小本本移除" : "已经同步到云端小本本");
+    } catch (favoriteError) {
+      console.error("Failed to update Neon favorite", favoriteError);
+      setSaved(previous);
+      notify("收藏没有同步成功，请稍后再试");
+    }
   };
 
   return (
@@ -135,6 +320,11 @@ function App() {
           <span><b>喜点什么？</b><small>随机搭配研究所</small></span>
         </a>
         <div className="topbar__actions">
+          <button className={`account-button ${user ? "account-button--signed" : ""}`} onClick={() => setSheet("auth")} aria-label={user ? "账号与同步" : "登录同步收藏"}>
+            {auth.isPending ? <LoaderCircle className="spin" size={17} /> : user ? <span>{(user.name || user.email).slice(0, 1).toUpperCase()}</span> : <UserRound size={17} />}
+            <b>{auth.isPending ? "确认账号" : user ? (user.name || "已登录") : "登录同步"}</b>
+            {user && !syncing && <i><Check size={10} /></i>}
+          </button>
           <button className="text-button" onClick={() => setSheet("saved")}>
             <Heart size={17} fill={saved.length ? "currentColor" : "none"} />
             <span>小本本</span>
@@ -274,7 +464,7 @@ function App() {
 
       {sheet && (
         <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setSheet(null)}>
-          <aside className="sheet" role="dialog" aria-modal="true" aria-label={sheet === "sources" ? "资料来源" : "收藏配方"}>
+          <aside className="sheet" role="dialog" aria-modal="true" aria-label={sheet === "sources" ? "资料来源" : sheet === "saved" ? "收藏配方" : "账号登录与同步"}>
             <div className="sheet__handle" />
             <button className="sheet__close" onClick={() => setSheet(null)}><X size={20} /></button>
             {sheet === "sources" ? (
@@ -291,10 +481,18 @@ function App() {
                 </div>
                 <div className="notice"><Info size={18} /><span>配方只使用公开出现的原料名；“灵感实验款”的同类原料不保证在所有门店被系统同时放行。</span></div>
               </>
-            ) : (
+            ) : sheet === "saved" ? (
               <>
                 <span className="eyebrow"><Heart size={15} /> SAVED MIXES</span>
                 <h2>我的搭配小本本</h2>
+                <div className={`cloud-banner ${user ? "cloud-banner--online" : ""}`}>
+                  {syncing ? <LoaderCircle className="spin" size={20} /> : user ? <Cloud size={20} /> : <CloudOff size={20} />}
+                  <span>
+                    <b>{syncing ? "正在对齐云端收藏" : user ? `已同步至 ${user.email}` : "当前收藏只在这台设备"}</b>
+                    <small>{user ? "退出后不会向下一位访客展示" : "登录后自动合并，并可跨设备查看"}</small>
+                  </span>
+                  {!user && <button onClick={() => setSheet("auth")}>去登录</button>}
+                </div>
                 {saved.length ? (
                   <div className="saved-list">
                     {saved.map((id) => {
@@ -313,6 +511,13 @@ function App() {
                   <div className="empty-state"><Heart size={30} /><b>本本还是空的</b><p>遇到喜欢的搭配，点一下卡片右上角的爱心。</p></div>
                 )}
               </>
+            ) : (
+              <AuthPanel
+                user={user}
+                syncing={syncing}
+                onAuthenticated={() => { setSheet(null); notify("登录成功，正在同步小本本"); }}
+                onSignedOut={() => { setSheet(null); notify("已经安全退出账号"); }}
+              />
             )}
           </aside>
         </div>
@@ -323,4 +528,14 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+function ConnectedApp() {
+  const session = neonClient.auth.useSession();
+  return <App auth={{ session: session.data, isPending: session.isPending, configured: true }} />;
+}
+
+function Root() {
+  if (neonConfigured) return <ConnectedApp />;
+  return <App auth={{ session: null, isPending: false, configured: false }} />;
+}
+
+createRoot(document.getElementById("root")).render(<Root />);

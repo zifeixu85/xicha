@@ -57,6 +57,12 @@ button { -webkit-tap-highlight-color: transparent; }
 .brand small { display: block; margin-top: 5px; color: #747667; font-size: 9px; letter-spacing: .14em; }
 .topbar__actions { display: flex; align-items: center; gap: 10px; }
 .text-button, .round-button { border: 0; background: transparent; cursor: pointer; }
+.account-button { height: 40px; display: inline-flex; align-items: center; gap: 8px; padding: 0 13px; border: 1px solid var(--line); border-radius: 100px; background: rgba(255,250,240,.68); cursor: pointer; transition: .2s ease; }
+.account-button > span { width: 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; background: var(--green); color: white; font: 700 11px/1 "Noto Serif SC", serif; }
+.account-button b { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 500; }
+.account-button i { width: 15px; height: 15px; display: grid; place-items: center; margin-left: -3px; border-radius: 50%; background: #dcedcd; color: var(--green); font-style: normal; }
+.account-button:hover { background: white; transform: translateY(-2px); }
+.account-button--signed { border-color: rgba(63,111,73,.35); background: #edf3df; }
 .text-button { height: 40px; display: inline-flex; align-items: center; gap: 8px; padding: 0 13px; border: 1px solid var(--line); border-radius: 100px; }
 .text-button em { min-width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: var(--coral); color: white; font-size: 10px; font-style: normal; }
 .round-button { width: 40px; height: 40px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; }
@@ -191,6 +197,14 @@ footer button:hover { color: var(--green); }
 .source-list small { margin-top: 5px; color: #86877b; font-size: 9px; }
 .notice { display: flex; gap: 10px; margin-top: 25px; padding: 15px; border-radius: 14px; background: #ebe8c9; color: #61604d; font-size: 9px; line-height: 1.6; }
 .notice svg { flex: 0 0 auto; }
+.cloud-banner { min-height: 66px; display: flex; align-items: center; gap: 11px; margin: 22px 0 4px; padding: 13px 14px; border: 1px dashed rgba(38,49,37,.25); border-radius: 16px; background: #f0ead8; color: #777568; }
+.cloud-banner--online { background: #e8f0dc; color: var(--green); }
+.cloud-banner > svg { flex: 0 0 auto; }
+.cloud-banner span { min-width: 0; flex: 1; }
+.cloud-banner b, .cloud-banner small { display: block; }
+.cloud-banner b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 11px/1.35 "Noto Serif SC", serif; }
+.cloud-banner small { margin-top: 4px; color: #858578; font-size: 8px; }
+.cloud-banner button { flex: 0 0 auto; padding: 8px 11px; border: 0; border-radius: 10px; background: var(--green); color: white; cursor: pointer; font-size: 9px; }
 .saved-list { margin-top: 28px; border-top: 2px solid var(--ink); }
 .saved-list button { width: 100%; min-height: 78px; display: flex; align-items: center; gap: 13px; padding: 10px 0; border: 0; border-bottom: 1px dashed var(--line); background: transparent; text-align: left; cursor: pointer; }
 .saved-list button > span { width: 40px; height: 40px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 45% 55% 48% 52%; font: 900 18px/1 "Noto Serif SC", serif; }
@@ -203,6 +217,38 @@ footer button:hover { color: var(--green); }
 .empty-state svg { color: var(--coral); }
 .empty-state b { display: block; margin-top: 12px; font: 700 16px/1 "Noto Serif SC", serif; color: var(--ink); }
 .empty-state p { font-size: 10px; }
+.auth-panel h2, .auth-setup h2, .account-panel h2 { max-width: 390px; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; margin: 25px 0 21px; padding: 4px; border-radius: 15px; background: #ece6d4; }
+.auth-tabs button { height: 39px; border: 0; border-radius: 11px; background: transparent; cursor: pointer; color: #858277; font-size: 11px; }
+.auth-tabs button.active { background: #fffaf0; color: var(--ink); box-shadow: 0 5px 14px rgba(52,55,38,.1); font-weight: 700; }
+.auth-panel form { display: grid; gap: 14px; }
+.auth-panel label > span { display: flex; align-items: center; gap: 7px; margin: 0 0 7px 3px; color: #626459; font-size: 9px; }
+.auth-panel input { width: 100%; height: 50px; padding: 0 15px; border: 1px solid rgba(38,49,37,.22); border-radius: 14px 11px 15px 12px; background: rgba(255,255,255,.72); color: var(--ink); font: 12px/1 "DM Mono", "PingFang SC", sans-serif; transition: .2s ease; }
+.auth-panel input:focus { outline: 3px solid rgba(63,111,73,.16); border-color: var(--green); background: white; }
+.auth-submit { height: 53px; display: flex; justify-content: center; align-items: center; gap: 9px; margin-top: 4px; border: 0; border-radius: 17px 13px 18px 15px; background: var(--green); color: white; cursor: pointer; box-shadow: 0 6px 0 #294c32; font-weight: 500; }
+.auth-submit:hover { transform: translateY(-2px); box-shadow: 0 8px 0 #294c32; }
+.auth-submit:disabled { opacity: .65; cursor: wait; }
+.auth-message { margin: 0; padding: 10px 12px; border-radius: 11px; font-size: 9px; line-height: 1.55; }
+.auth-message--error { background: #f7d9d0; color: #8a3f34; }
+.auth-message--success { background: #e0ecd4; color: #355e3c; }
+.auth-fineprint { margin: 23px 0 0; color: #98968b; text-align: center; font-size: 8px; line-height: 1.6; }
+.auth-setup { padding-top: 35px; text-align: center; }
+.auth-setup__cloud { width: 72px; height: 72px; display: grid; place-items: center; margin: 0 auto 20px; border-radius: 44% 56% 50% 50%; background: #e7e1c5; color: var(--green); transform: rotate(-4deg); }
+.auth-setup > p { max-width: 340px; margin: 0 auto 22px; color: #76776c; font-size: 10px; line-height: 1.8; }
+.auth-setup code { display: block; width: min(340px, 100%); margin: 7px auto; padding: 12px; border: 1px dashed rgba(38,49,37,.26); border-radius: 10px; background: #f2ecda; color: #4a6449; font-size: 9px; text-align: left; }
+.auth-setup .notice { max-width: 340px; margin: 23px auto 0; text-align: left; }
+.account-panel { padding-top: 30px; text-align: center; }
+.account-panel__avatar { width: 88px; height: 88px; display: grid; place-items: center; margin: 0 auto 24px; border-radius: 45% 55% 48% 52%; background: var(--green); color: white; box-shadow: 7px 8px 0 #d7dfb2; font: 900 39px/1 "Noto Serif SC", serif; transform: rotate(-3deg); }
+.account-panel h2 { margin-left: auto; margin-right: auto; }
+.account-panel > p { margin: -4px 0 26px; color: #838477; font-size: 10px; }
+.sync-status { display: flex; align-items: center; gap: 12px; padding: 17px; border: 1px solid rgba(63,111,73,.2); border-radius: 16px; background: #edf3df; color: var(--green); text-align: left; }
+.sync-status > svg { flex: 0 0 auto; }
+.sync-status b, .sync-status small { display: block; }
+.sync-status b { font: 700 12px/1.4 "Noto Serif SC", serif; }
+.sync-status small { margin-top: 5px; color: #7c8170; font-size: 8px; }
+.signout-button { height: 43px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: 28px; padding: 0 18px; border: 1px solid var(--line); border-radius: 100px; background: transparent; color: #7b554b; cursor: pointer; font-size: 10px; }
+.signout-button:hover { background: #f5ded6; border-color: #dda99b; }
+.spin { animation: iconSpin .8s linear infinite; }
 .toast { position: fixed; z-index: 50; left: 50%; bottom: 26px; height: 43px; display: flex; align-items: center; gap: 8px; padding: 0 17px; border-radius: 100px; background: var(--ink); color: white; font-size: 11px; transform: translate(-50%, 25px); opacity: 0; pointer-events: none; transition: .25s ease; box-shadow: 0 12px 30px rgba(20,25,20,.25); }
 .toast--show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -225,6 +271,7 @@ footer button:hover { color: var(--green); }
 @keyframes sheetIn { from { transform: translateX(100%); } }
 @keyframes splashShake { from { transform: rotate(-7deg) translateY(2px); } to { transform: rotate(7deg) translateY(-6px); } }
 @keyframes dotBounce { to { transform: translateY(-6px); opacity: .35; } }
+@keyframes iconSpin { to { transform: rotate(360deg); } }
 
 @media (max-width: 970px) {
   main { padding-left: 20px; padding-right: 20px; }
@@ -243,6 +290,8 @@ footer button:hover { color: var(--green); }
   .brand__seal { width: 37px; height: 37px; font-size: 21px; }
   .brand b { font-size: 16px; }
   .brand small { display: none; }
+  .account-button { width: 40px; padding: 0; justify-content: center; }
+  .account-button b, .account-button i { display: none; }
   .text-button span { display: none; }
   main { padding: 38px 14px 75px; }
   .intro-copy h1 { font-size: clamp(37px, 11vw, 52px); }
