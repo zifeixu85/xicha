@@ -9,6 +9,8 @@ npm install
 npm run dev
 ```
 
+开发服务器会同时提供 Vite 页面与同源的 `/api/blessing` 服务，默认地址为 `http://localhost:5173`。
+
 生产构建：
 
 ```bash
@@ -25,6 +27,7 @@ npm run preview
 - Neon Auth 邮箱注册 / 登录，收藏随账号跨设备同步
 - 未登录收藏自动暂存，首次登录后合并进云端
 - 五类原创手绘饮品插画与响应式动效界面
+- 每次随机后由 DeepSeek V4 Pro 根据饮品和浏览器当地时间生成不重复签语
 - 内置菜单资料来源与门店可售提示
 
 ## Neon 登录与云端收藏
@@ -51,9 +54,12 @@ cp .env.example .env
 VITE_NEON_AUTH_URL=你的 Auth URL
 VITE_NEON_DATA_API_URL=你的 Data API URL
 DATABASE_URL=你的 pooled connection string
+DEEPSEEK_API_KEY=你的 DeepSeek API Key
 ```
 
 `VITE_` 开头的两个值是浏览器可用的公开服务地址。`DATABASE_URL` 含数据库密码，只能放在本地或部署平台的服务端环境变量中，不能改名为 `VITE_DATABASE_URL`。
+
+`DEEPSEEK_API_KEY` 也只能配置在服务端。浏览器只请求同源的 `/api/blessing`，服务端再调用 `deepseek-v4-pro`，因此 Key 不会进入前端构建产物。部署到 Vercel 时，同样需要在项目环境变量中配置它。
 
 ### 3. 创建收藏表与 RLS
 

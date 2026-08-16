@@ -46,6 +46,7 @@ const pickRandom = (items, currentId) => {
 
 const GUEST_FAVORITES_KEY = "heytea-saved-guest";
 const LEGACY_FAVORITES_KEY = "heytea-saved";
+const RECENT_BLESSINGS_KEY = "heytea-ai-blessings";
 
 const readGuestFavorites = () => {
   try {
@@ -57,6 +58,31 @@ const readGuestFavorites = () => {
   } catch {
     return [];
   }
+};
+
+const readRecentBlessings = () => {
+  try {
+    const values = JSON.parse(localStorage.getItem(RECENT_BLESSINGS_KEY) || "[]");
+    return Array.isArray(values) ? values.filter((item) => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+};
+
+const getLocalMoment = () => {
+  const now = new Date();
+  return {
+    localTime: new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      weekday: "long",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(now),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+  };
 };
 
 const friendlyAuthError = (error) => {
@@ -180,7 +206,10 @@ function App({ auth }) {
   const [toast, setToast] = useState("");
   const [saved, setSaved] = useState(readGuestFavorites);
   const [syncing, setSyncing] = useState(false);
+  const [aiBlessing, setAiBlessing] = useState({ status: "idle", text: "摇一杯，让 AI 为此刻写下一张签。" });
   const toastTimer = useRef(null);
+  const blessingController = useRef(null);
+  const recentBlessings = useRef(readRecentBlessings());
   const user = auth.session?.user || null;
 
   const meta = categoryMeta[recipe.category];
@@ -194,6 +223,8 @@ function App({ auth }) {
     const timer = window.setTimeout(() => setIntro(false), 980);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => () => blessingController.current?.abort(), []);
 
   useEffect(() => {
     if (!user && !auth.isPending) {
@@ -252,13 +283,63 @@ function App({ auth }) {
     return () => { cancelled = true; };
   }, [user?.id, auth.isPending]);
 
+  const requestBlessing = async (nextRecipe) => {
+    blessingController.current?.abort();
+    const controller = new AbortController();
+    blessingController.current = controller;
+    const moment = getLocalMoment();
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    setAiBlessing({ status: "loading", text: "正在听这一杯和此刻说话…", time: moment.localTime });
+
+    try {
+      let payload = {};
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const recentForRequest = recentBlessings.current.slice(-79);
+        if (payload.blessing && !recentForRequest.includes(payload.blessing)) recentForRequest.push(payload.blessing);
+        const response = await fetch("/api/blessing", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipe: {
+              name: nextRecipe.name,
+              category: categoryMeta[nextRecipe.category]?.name,
+              summary: nextRecipe.summary,
+              layers: nextRecipe.layers,
+            },
+            ...moment,
+            recent: recentForRequest,
+            requestId: `${requestId}-${attempt}`,
+          }),
+          signal: controller.signal,
+        });
+        payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "AI 签语暂时没有摇出来");
+        if (!recentBlessings.current.includes(payload.blessing)) break;
+      }
+      if (!payload.blessing || recentBlessings.current.includes(payload.blessing)) {
+        throw new Error("这次撞签了，请再摇一次。");
+      }
+
+      const nextRecent = [...recentBlessings.current, payload.blessing];
+      recentBlessings.current = nextRecent;
+      localStorage.setItem(RECENT_BLESSINGS_KEY, JSON.stringify(nextRecent));
+      setAiBlessing({ status: "ready", text: payload.blessing, time: moment.localTime });
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      console.error("Failed to generate AI blessing", error);
+      setAiBlessing({ status: "error", text: error.message || "AI 签语暂时没有摇出来，请再摇一次。", time: moment.localTime });
+    }
+  };
+
   const roll = (nextMood = mood) => {
     if (rolling) return;
     setRolling(true);
     const nextPool = nextMood === "all" ? recipes : recipes.filter((item) => item.category === nextMood);
     window.setTimeout(() => {
-      setRecipe(pickRandom(nextPool, recipe.id));
+      const nextRecipe = pickRandom(nextPool, recipe.id);
+      setRecipe(nextRecipe);
       setRolling(false);
+      requestBlessing(nextRecipe);
     }, 440);
   };
 
@@ -273,7 +354,8 @@ function App({ auth }) {
   };
 
   const shareRecipe = async () => {
-    const text = `今天喝「${recipe.name}」：${recipe.orderLine}`;
+    const blessingText = aiBlessing.status === "ready" ? `\n今日签：${aiBlessing.text}` : "";
+    const text = `今天喝「${recipe.name}」：${recipe.orderLine}${blessingText}`;
     if (navigator.share) {
       try {
         await navigator.share({ title: "喜点什么？", text });
@@ -394,6 +476,15 @@ function App({ auth }) {
 
             <div className="taste-tags">
               {recipe.tags.map((tag) => <span key={tag}>#{tag}</span>)}
+            </div>
+
+            <div className={`ai-blessing ai-blessing--${aiBlessing.status}`}>
+              <div className="ai-blessing__head">
+                <span>{aiBlessing.status === "loading" ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} AI 此刻签</span>
+                <small>{aiBlessing.status === "ready" ? "DEEPSEEK V4 PRO" : "LOCAL TIME"}</small>
+              </div>
+              <p>{aiBlessing.text}</p>
+              {aiBlessing.time && <time>{aiBlessing.time}</time>}
             </div>
 
             <div className="formula">
