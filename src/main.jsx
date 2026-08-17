@@ -14,10 +14,14 @@ import {
   LockKeyhole,
   LogOut,
   Mail,
+  MessageCircleHeart,
+  Pause,
+  Play,
   RotateCcw,
   Share2,
   Sparkles,
   UserRound,
+  Volume2,
   X,
 } from "lucide-react";
 import {
@@ -206,9 +210,16 @@ function App({ auth }) {
   const [toast, setToast] = useState("");
   const [saved, setSaved] = useState(readGuestFavorites);
   const [syncing, setSyncing] = useState(false);
+  const [moodNote, setMoodNote] = useState("");
   const [aiBlessing, setAiBlessing] = useState({ status: "idle", text: "摇一杯，让 AI 为此刻写下一张签。" });
+  const [speech, setSpeech] = useState({ status: "idle", url: "", message: "" });
   const toastTimer = useRef(null);
   const blessingController = useRef(null);
+  const blessingGeneration = useRef(0);
+  const speechController = useRef(null);
+  const speechGeneration = useRef(0);
+  const audioRef = useRef(null);
+  const currentBlessing = useRef("");
   const recentBlessings = useRef(readRecentBlessings());
   const user = auth.session?.user || null;
 
@@ -218,13 +229,18 @@ function App({ auth }) {
     [mood],
   );
   const isSaved = saved.includes(recipe.id);
+  const moodNoteLength = Array.from(moodNote).length;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setIntro(false), 980);
     return () => window.clearTimeout(timer);
   }, []);
 
-  useEffect(() => () => blessingController.current?.abort(), []);
+  useEffect(() => () => {
+    blessingController.current?.abort();
+    speechController.current?.abort();
+    audioRef.current?.pause();
+  }, []);
 
   useEffect(() => {
     if (!user && !auth.isPending) {
@@ -283,10 +299,25 @@ function App({ auth }) {
     return () => { cancelled = true; };
   }, [user?.id, auth.isPending]);
 
-  const requestBlessing = async (nextRecipe) => {
+  const resetSpeech = () => {
+    speechGeneration.current += 1;
+    speechController.current?.abort();
+    speechController.current = null;
+    currentBlessing.current = "";
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.removeAttribute("src");
+      audioRef.current.load();
+    }
+    setSpeech({ status: "idle", url: "", message: "" });
+  };
+
+  const requestBlessing = async (nextRecipe, noteForRequest) => {
     blessingController.current?.abort();
     const controller = new AbortController();
     blessingController.current = controller;
+    const generation = blessingGeneration.current + 1;
+    blessingGeneration.current = generation;
     const moment = getLocalMoment();
     const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
     setAiBlessing({ status: "loading", text: "正在听这一杯和此刻说话…", time: moment.localTime });
@@ -307,6 +338,7 @@ function App({ auth }) {
               layers: nextRecipe.layers,
             },
             ...moment,
+            moodNote: noteForRequest,
             recent: recentForRequest,
             requestId: `${requestId}-${attempt}`,
           }),
@@ -319,13 +351,20 @@ function App({ auth }) {
       if (!payload.blessing || recentBlessings.current.includes(payload.blessing)) {
         throw new Error("这次撞签了，请再摇一次。");
       }
+      if (generation !== blessingGeneration.current) return;
 
       const nextRecent = [...recentBlessings.current, payload.blessing];
       recentBlessings.current = nextRecent;
       localStorage.setItem(RECENT_BLESSINGS_KEY, JSON.stringify(nextRecent));
-      setAiBlessing({ status: "ready", text: payload.blessing, time: moment.localTime });
+      currentBlessing.current = payload.blessing;
+      setAiBlessing({
+        status: "ready",
+        text: payload.blessing,
+        time: moment.localTime,
+        speechToken: payload.speechToken || "",
+      });
     } catch (error) {
-      if (error.name === "AbortError") return;
+      if (error.name === "AbortError" || generation !== blessingGeneration.current) return;
       console.error("Failed to generate AI blessing", error);
       setAiBlessing({ status: "error", text: error.message || "AI 签语暂时没有摇出来，请再摇一次。", time: moment.localTime });
     }
@@ -333,14 +372,85 @@ function App({ auth }) {
 
   const roll = (nextMood = mood) => {
     if (rolling) return;
+    blessingGeneration.current += 1;
+    blessingController.current?.abort();
+    resetSpeech();
+    setAiBlessing({ status: "loading", text: "正在摇匀这一杯和此刻…" });
     setRolling(true);
+    const noteForRequest = moodNote.trim();
     const nextPool = nextMood === "all" ? recipes : recipes.filter((item) => item.category === nextMood);
     window.setTimeout(() => {
       const nextRecipe = pickRandom(nextPool, recipe.id);
       setRecipe(nextRecipe);
       setRolling(false);
-      requestBlessing(nextRecipe);
+      requestBlessing(nextRecipe, noteForRequest);
     }, 440);
+  };
+
+  const playCachedSpeech = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.ended) audio.currentTime = 0;
+    try {
+      await audio.play();
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      setSpeech((current) => ({
+        ...current,
+        status: "ready",
+        message: "语音已生成，请再点一次播放。",
+      }));
+    }
+  };
+
+  const toggleSpeech = async () => {
+    const audio = audioRef.current;
+    if (speech.status === "playing") {
+      audio?.pause();
+      return;
+    }
+    if (speech.url) {
+      await playCachedSpeech();
+      return;
+    }
+    if (aiBlessing.status !== "ready") return;
+    if (!aiBlessing.speechToken) {
+      setSpeech({ status: "error", url: "", message: "语音服务尚未配置，请稍后再试。" });
+      return;
+    }
+
+    speechController.current?.abort();
+    const controller = new AbortController();
+    speechController.current = controller;
+    const generation = speechGeneration.current;
+    const blessingText = aiBlessing.text;
+    setSpeech({ status: "loading", url: "", message: "温柔女声正在读这张签…" });
+
+    try {
+      const response = await fetch("/api/speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: blessingText, token: aiBlessing.speechToken }),
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "签语语音暂时生成不了");
+      if (!payload.audio) throw new Error("没有收到可以播放的语音");
+      if (generation !== speechGeneration.current || currentBlessing.current !== blessingText) return;
+
+      setSpeech({ status: "ready", url: payload.audio, message: "" });
+      if (audioRef.current) {
+        audioRef.current.src = payload.audio;
+        audioRef.current.load();
+        await playCachedSpeech();
+      }
+    } catch (error) {
+      if (error.name === "AbortError" || generation !== speechGeneration.current) return;
+      console.error("Failed to generate blessing speech", error);
+      setSpeech({ status: "error", url: "", message: error.message || "签语语音暂时生成不了，请稍后再试。" });
+    } finally {
+      if (speechController.current === controller) speechController.current = null;
+    }
   };
 
   const chooseMood = (nextMood) => {
@@ -425,6 +535,26 @@ function App({ auth }) {
           <p>摇一杯公开菜单可复刻的搭配，带着口令去小程序下单。</p>
         </section>
 
+        <section className="mood-note" aria-labelledby="mood-note-title">
+          <span className="mood-note__pin" aria-hidden="true" />
+          <div className="mood-note__copy">
+            <span className="eyebrow"><MessageCircleHeart size={15} /> OPTIONAL · 只在本次摇签使用</span>
+            <label id="mood-note-title" htmlFor="mood-note-input">今天发生了什么？</label>
+            <p>写下一点此刻的心情，AI 会让这杯更懂你。</p>
+          </div>
+          <div className="mood-note__field">
+            <textarea
+              id="mood-note-input"
+              value={moodNote}
+              maxLength={120}
+              rows={3}
+              placeholder="比如：刚结束一段关系、有点丧，或是今天终于升职啦…"
+              onChange={(event) => setMoodNote(Array.from(event.target.value).slice(0, 120).join(""))}
+            />
+            <span className={moodNoteLength >= 108 ? "near-limit" : ""}>{moodNoteLength} / 120</span>
+          </div>
+        </section>
+
         <nav className="mood-strip" aria-label="选择此刻心情">
           {moods.map((item) => (
             <button
@@ -485,6 +615,35 @@ function App({ auth }) {
               </div>
               <p>{aiBlessing.text}</p>
               {aiBlessing.time && <time>{aiBlessing.time}</time>}
+              {aiBlessing.status === "ready" && currentBlessing.current === aiBlessing.text && (
+                <div className="speech-player">
+                  <audio
+                    ref={audioRef}
+                    preload="none"
+                    onPlay={() => setSpeech((current) => ({ ...current, status: "playing", message: "" }))}
+                    onPause={() => setSpeech((current) => current.status === "playing" ? { ...current, status: "paused" } : current)}
+                    onEnded={() => setSpeech((current) => ({ ...current, status: "ended", message: "已播完，再听一次也可以。" }))}
+                    onError={() => setSpeech((current) => current.url ? { status: "error", url: "", message: "音频加载失败，请重新生成。" } : current)}
+                  />
+                  <button
+                    type="button"
+                    className={`speech-button speech-button--${speech.status}`}
+                    onClick={toggleSpeech}
+                    disabled={speech.status === "loading"}
+                    aria-label={speech.status === "playing" ? "暂停签语" : speech.url ? "播放签语" : "生成并播放签语"}
+                  >
+                    {speech.status === "loading" ? <LoaderCircle className="spin" size={16} />
+                      : speech.status === "playing" ? <Pause size={16} fill="currentColor" />
+                        : speech.url ? <Play size={16} fill="currentColor" /> : <Volume2 size={16} />}
+                    <span>{speech.status === "loading" ? "正在生成语音"
+                      : speech.status === "playing" ? "暂停"
+                        : speech.status === "paused" ? "继续播放"
+                          : speech.status === "ended" ? "重新播放"
+                            : speech.url ? "播放" : speech.status === "error" ? "重新生成" : "听听这张签"}</span>
+                  </button>
+                  {speech.message && <small className={`speech-player__status speech-player__status--${speech.status}`} role="status">{speech.message}</small>}
+                </div>
+              )}
             </div>
 
             <div className="formula">
