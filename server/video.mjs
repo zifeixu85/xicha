@@ -9,6 +9,7 @@ const TASK_TYPES = new Set(["image", "video"]);
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$/;
 const MAX_URL_LENGTH = 2_048;
 const REQUEST_TIMEOUT_MS = 20_000;
+const TRUSTED_MEDIA_HOSTS = new Set(["files.evolink.ai"]);
 
 export class VideoServiceError extends Error {
   constructor(message, statusCode = 502, code = "video_service_error") {
@@ -114,7 +115,8 @@ export const validatePublicImageUrl = async (value, {
   lookupImpl = (hostname) => dnsLookup(hostname, { all: true, verbatim: true }),
 } = {}) => {
   const parsed = parsePublicHttpsUrl(value, "图片地址");
-  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+  if (TRUSTED_MEDIA_HOSTS.has(hostname)) return parsed.toString();
   if (!isIP(hostname)) {
     let addresses;
     try {

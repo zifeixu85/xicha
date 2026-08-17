@@ -5,6 +5,7 @@ import {
   createVideoFrameTask,
   createVideoTask,
   queryTask,
+  validatePublicImageUrl,
 } from "../server/video.mjs";
 import { createVideoHandlers, createVideoRouter } from "../server/video-api.mjs";
 import { createHandler as createVercelFrameHandler } from "../api/generate-video-frame.js";
@@ -173,6 +174,23 @@ test("strict validation blocks SSRF, arbitrary model fields, and overlong mood t
       drink,
       moodNote: "心".repeat(121),
     }, apiKey, { fetchImpl: neverFetch, lookupImpl: publicDns }),
+    (error) => error.statusCode === 400,
+  );
+});
+
+test("trusted Evolink media survives local proxy fake-IP DNS without weakening SSRF checks", async () => {
+  const fakeIpDns = async () => [{ address: "198.18.9.246", family: 4 }];
+  assert.equal(
+    await validatePublicImageUrl("https://files.evolink.ai/path/drink.png", { lookupImpl: fakeIpDns }),
+    "https://files.evolink.ai/path/drink.png",
+  );
+
+  await assert.rejects(
+    validatePublicImageUrl("https://files.evolink.ai.attacker.test/drink.png", { lookupImpl: fakeIpDns }),
+    (error) => error.statusCode === 400,
+  );
+  await assert.rejects(
+    validatePublicImageUrl("https://images.example.com/drink.png", { lookupImpl: fakeIpDns }),
     (error) => error.statusCode === 400,
   );
 });
