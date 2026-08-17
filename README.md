@@ -78,7 +78,7 @@ VIDEO_TASK_SIGNING_SECRET=随机长字符串
 
 ### 多模态 API 鉴权契约
 
-音频、图片、视频生成必须使用同一套服务端鉴权，不能把隐藏或禁用前端按钮当成安全边界。当前浏览器协议是：
+自创文本、音频、图片、视频生成及任务查询都使用同一套服务端鉴权，不能把隐藏或禁用前端按钮当成安全边界。当前浏览器协议是：
 
 1. 请求前调用 `neonClient.auth.getSession()`，从 `data.session.token` 读取当前短期 JWT；token 只保留在 Neon Auth 的内存会话中，不写入 `localStorage`。
 2. 向同源 API 添加 `Authorization: Bearer <token>`；前端 helper 会拒绝跨域目标，避免误把 token 发给第三方。
@@ -89,14 +89,14 @@ JWT 是 Neon Auth 签发的短期服务凭证（当前 Better Auth 默认约 15 
 
 实现依据是当前 `@neondatabase/neon-js` 的 `set-auth-jwt` 会话行为，以及 Better Auth 的 [JWT/JWKS 验证契约](https://better-auth.com/docs/plugins/jwt)。
 
-当前 `/api/speech` 已同时接入这套登录校验与原有短时 HMAC speech ticket。后续新增图片或视频 handler 时，在读取业务身份或调用供应商之前复用同一个 guard：
+Express 与 Vercel 的 `/api/create-custom-drink`、`/api/speech`、图片和视频 handler 均已接入同一个 guard；鉴权总是在限流和外部模型调用之前完成：
 
 ```js
 import { requireAuthenticatedUser } from "./server/auth.mjs";
 
 const auth = await requireAuthenticatedUser(request, response);
 if (!auth) return;
-// 这里只使用 auth.user.id；随后才校验输入、限流并调用生成服务。
+// 这里只使用 auth.user.id；随后才限流并调用生成服务。
 ```
 
 这段接口同时兼容 Express 的 `request/response` 和 Vercel Node handlers；测试时也可以向 `authenticateRequest` 注入本地 JWKS key set，不需要绕过生产验证逻辑。
@@ -144,7 +144,7 @@ if (!auth) return;
 
 查询方式为 `GET /api/video-task?taskId=...&taskType=image&pollToken=...`。状态统一为 `pending`、`processing`、`completed`、`failed` 或 `cancelled`；终态的 `pollAfterMs` 为 `null`。首帧完成后返回 `taskType: "image"`、`stage: "frame"`，视频完成后返回 `taskType: "video"`、`stage: "video"`。
 
-所有视频接口默认要求上游鉴权把已验证主体放到 `request.auth` 或 `request.user`。也可以在合并认证分支时通过 `createVideoRouter({ authGuard })`，或三个 Vercel 文件导出的 `createHandler({ authGuard })` 注入异步 guard；guard 必须返回包含 `id`、`userId` 或 `sub` 的服务端验证主体。请求体中的 `userId` 会被当作未知字段拒绝。轮询凭证用 `VIDEO_TASK_SIGNING_SECRET`（未配置时回退到服务端 Evolink Key）签名并绑定该主体，不能跨账号查询。
+所有视频接口默认直接调用 `server/auth.mjs` 验证 Neon JWT；测试或基础设施也可以通过 `createVideoRouter({ authGuard })` 及 Vercel 文件导出的 `createHandler({ authGuard })` 注入等价 guard。请求体中的 `userId` 会被当作未知字段拒绝。轮询凭证用 `VIDEO_TASK_SIGNING_SECRET`（未配置时回退到服务端 Evolink Key）签名并绑定已验证主体，不能跨账号查询。
 
 便于其他分支直接复用的底层契约位于 `server/video.mjs`：
 
@@ -158,12 +158,13 @@ queryTask(taskId, "image" | "video", apiKey, options)
 
 自创饮品文本由 `POST /api/create-custom-drink` 提供。服务端只把经过长度与结构清洗的配料/心情放入 user message，使用严格 JSON 输出并在格式异常时安全回落；图片与视频描述由服务端模板结合已审核的饮品文案构造，不会把用户文本作为 system instruction。前端媒体 adapter 预留以下集成契约：
 
-- `POST /api/generate-drink-image` → `{ taskId }`
-- `GET /api/media-task?taskId=...` → `{ status, progress, url? }`
-- `POST /api/generate-video-frame` → `{ taskId }`（扩展 16:9 首帧）
-- `POST /api/generate-drink-video` → `{ taskId }`（720p、5 秒）
+- `POST /api/generate-drink-image` → `{ taskId, pollToken }`
+- `GET /api/media-task?taskId=...&pollToken=...` → `{ status, progress, results? }`
+- `POST /api/generate-video-frame` → `{ taskId, taskType, pollToken }`（扩展 16:9 首帧）
+- `GET /api/video-task?taskId=...&taskType=...&pollToken=...` → `{ status, progress, resultUrl? }`
+- `POST /api/generate-drink-video` → `{ taskId, taskType, pollToken }`（720p、5 秒）
 
-所有自创生成请求都会在会话可用时发送 `Authorization: Bearer <session token>`。当前分支实现前端门禁；媒体任务及各自创接口的服务端鉴权应在后续集成时强制执行。
+所有自创生成请求都会通过同源 auth fetch helper 在每次请求前重新读取当前 session JWT，并发送 `Authorization: Bearer <session token>`；服务端对缺失、伪造、过期或匿名 token 均拒绝。图片和视频查询凭证还会额外绑定任务、类型和已验证用户。
 
 祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本。心情输入第一版只随本次请求发送，不写入账号数据库或本地存储。
 
@@ -222,13 +223,13 @@ Express 开发服务器和 Vercel Functions 提供相同的两个端点。所有
 
 ### 查询任务
 
-`GET /api/media-task?taskId=task-unified-...`
+`GET /api/media-task?taskId=task-unified-...&pollToken=...`
 
 返回 HTTP 200。`status` 为 `pending`、`processing`、`completed` 或 `failed`；完成后 `results` 含唯一的 HTTPS 图片地址，失败时包含中文 `error`。结果 URL 由 Evolink 托管且仅约 24 小时有效，消费方应及时转存，不能把它当永久资源。
 
 ### 认证与限流集成
 
-两个 handler 都由工厂创建，并接受 `authenticateRequest(request)` 注入。该函数必须在服务端校验会话，并返回 `{ userId }` 或 `{ user: { id } }`；接口从不信任请求体或查询参数中的 `userId`。当前基线只有浏览器侧 Neon Auth，没有服务端会话校验模块，因此默认实现只接受认证中间件写入的 `request.auth`，缺失时会安全地返回 503。接入主应用时应注入正式 Neon 服务端认证适配，不能把客户端声明的用户 ID 直接写入 `request.auth`。
+两个 handler 默认复用 `server/auth.mjs` 的 Neon JWKS 验签，也允许测试注入等价的 `authenticateRequest(request)`。接口从不信任请求体或查询参数中的 `userId`。创建任务返回的 `pollToken` 由服务端签名并绑定任务与已验证用户；换账号查询会返回 403，缺少登录则返回 401。
 
 默认内存限流同时按已认证用户和 IP 计数：创建任务每 10 分钟每用户 8 次、每 IP 16 次；查询每 10 分钟每用户 120 次、每 IP 240 次。它适合单进程开发环境；多实例 Vercel 部署应把 handler 的 `rateLimiter` 注入替换成带异步 `consume({ action, userId, ip })` 的共享存储实现，以获得全局限流。
 

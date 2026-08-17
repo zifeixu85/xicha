@@ -3,6 +3,7 @@ import io
 import json
 import time
 import wave
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -68,11 +69,16 @@ class ApiMocks:
         def image_start(route):
             self.image_starts += 1
             self.generation_headers.append(route.request.headers.get("authorization"))
-            route.fulfill(status=200, content_type="application/json", body=json.dumps({"taskId": f"image-{self.image_starts}"}))
+            route.fulfill(status=202, content_type="application/json", body=json.dumps({
+                "taskId": f"image-{self.image_starts}",
+                "pollToken": f"image-poll-{self.image_starts}",
+            }))
 
         def media_task(route):
             self.generation_headers.append(route.request.headers.get("authorization"))
-            task_id = route.request.url.split("taskId=")[-1]
+            query = parse_qs(urlparse(route.request.url).query)
+            task_id = query["taskId"][0]
+            assert query["pollToken"][0] == f"image-poll-{task_id.split('-')[-1]}"
             self.poll_counts[task_id] = self.poll_counts.get(task_id, 0) + 1
             count = self.poll_counts[task_id]
             if task_id == "image-1":
@@ -92,15 +98,45 @@ class ApiMocks:
             route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
 
         def frame_start(route):
+            payload = json.loads(route.request.post_data or "{}")
+            assert payload["drink"]["category"] == "自创饮品"
+            assert payload["drink"]["layers"]
+            assert payload["moodNote"] == self.custom_requests[-1]["note"]
             self.generation_headers.append(route.request.headers.get("authorization"))
-            route.fulfill(status=200, content_type="application/json", body=json.dumps({"taskId": "frame-1"}))
+            route.fulfill(status=202, content_type="application/json", body=json.dumps({
+                "taskId": "frame-1",
+                "taskType": "image",
+                "pollToken": "frame-poll-1",
+            }))
 
         def video_start(route):
             payload = json.loads(route.request.post_data or "{}")
-            assert payload["duration"] == 5
-            assert payload["resolution"] == "720p"
+            assert set(payload) == {"frameUrl", "drink", "moodNote"}
+            assert payload["moodNote"] == self.custom_requests[-1]["note"]
             self.generation_headers.append(route.request.headers.get("authorization"))
-            route.fulfill(status=200, content_type="application/json", body=json.dumps({"taskId": "video-1"}))
+            route.fulfill(status=202, content_type="application/json", body=json.dumps({
+                "taskId": "video-1",
+                "taskType": "video",
+                "pollToken": "video-poll-1",
+            }))
+
+        def video_task(route):
+            self.generation_headers.append(route.request.headers.get("authorization"))
+            query = parse_qs(urlparse(route.request.url).query)
+            task_id = query["taskId"][0]
+            task_type = query["taskType"][0]
+            poll_token = query["pollToken"][0]
+            self.poll_counts[task_id] = self.poll_counts.get(task_id, 0) + 1
+            count = self.poll_counts[task_id]
+            if task_id.startswith("frame-"):
+                assert task_type == "image" and poll_token == "frame-poll-1"
+                self.frame_polls += 1
+                body = {"status": "processing", "progress": 43} if count == 1 else {"status": "completed", "resultUrl": IMAGE_DATA_URL}
+            else:
+                assert task_type == "video" and poll_token == "video-poll-1"
+                self.video_polls += 1
+                body = {"status": "processing", "progress": 52} if count == 1 else {"status": "completed", "resultUrl": "https://media.test/drink.mp4"}
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
 
         def speech(route):
             self.speech_requests.append(json.loads(route.request.post_data or "{}"))
@@ -109,9 +145,10 @@ class ApiMocks:
 
         context.route("**/api/create-custom-drink", custom)
         context.route("**/api/generate-drink-image", image_start)
-        context.route("**/api/media-task?taskId=*", media_task)
+        context.route("**/api/media-task?*", media_task)
         context.route("**/api/generate-video-frame", frame_start)
         context.route("**/api/generate-drink-video", video_start)
+        context.route("**/api/video-task?*", video_task)
         context.route("**/api/speech", speech)
         context.route("https://media.test/**", lambda route: route.fulfill(status=200, content_type="video/mp4", body=b""))
 

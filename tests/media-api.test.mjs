@@ -94,8 +94,23 @@ test("generate handler succeeds with structured input and never needs a client u
 });
 
 test("media task handler supports injected auth and returns completed URLs", async () => {
+  const signingSecret = "media-task-test-secret";
+  const createHandler = createGenerateDrinkImageHandler({
+    apiKey: "key",
+    signingSecret,
+    authenticateRequest: async () => ({ userId: "verified-user" }),
+    fetchImpl: async () => jsonResponse(taskPayload()),
+  });
+  const createResult = createResponse();
+  await createHandler({
+    method: "POST",
+    ip: "203.0.113.9",
+    body: { name: "莓莓云朵", ingredients: ["草莓", "椰奶"] },
+  }, createResult);
+
   const handler = createMediaTaskHandler({
     apiKey: "key",
+    signingSecret,
     authenticateRequest: async () => ({ userId: "verified-user" }),
     fetchImpl: async () => jsonResponse(taskPayload({
       status: "completed",
@@ -107,7 +122,10 @@ test("media task handler supports injected auth and returns completed URLs", asy
   await handler({
     method: "GET",
     ip: "203.0.113.9",
-    query: { taskId: "task-unified-1800000000-handler" },
+    query: {
+      taskId: "task-unified-1800000000-handler",
+      pollToken: createResult.body.pollToken,
+    },
   }, response);
 
   assert.equal(response.statusCode, 200);
@@ -115,7 +133,7 @@ test("media task handler supports injected auth and returns completed URLs", asy
   assert.equal(response.headers.get("cache-control"), "no-store, max-age=0");
 });
 
-test("secure default auth fails closed when no server session adapter is present", async () => {
+test("secure default auth rejects requests without a Neon bearer token", async () => {
   const handler = createGenerateDrinkImageHandler({
     apiKey: "key",
     fetchImpl: async () => assert.fail("provider must not be called"),
@@ -125,8 +143,38 @@ test("secure default auth fails closed when no server session adapter is present
     method: "POST",
     body: { name: "茶", ingredients: ["茶"] },
   }, response);
-  assert.equal(response.statusCode, 503);
-  assert.equal(response.body.code, "authentication_not_configured");
+  assert.equal(response.statusCode, 401);
+  assert.equal(response.body.code, "AUTH_REQUIRED");
+});
+
+test("media polling credential is bound to the verified user", async () => {
+  const signingSecret = "media-user-binding-secret";
+  const createHandler = createGenerateDrinkImageHandler({
+    apiKey: "key",
+    signingSecret,
+    authenticateRequest: async () => ({ userId: "verified-user-a" }),
+    fetchImpl: async () => jsonResponse(taskPayload()),
+  });
+  const created = createResponse();
+  await createHandler({
+    method: "POST",
+    body: { name: "莓莓云朵", ingredients: ["草莓", "椰奶"] },
+  }, created);
+
+  const queryHandler = createMediaTaskHandler({
+    apiKey: "key",
+    signingSecret,
+    authenticateRequest: async () => ({ userId: "verified-user-b" }),
+    fetchImpl: async () => assert.fail("provider must not be queried across users"),
+  });
+  const forbidden = createResponse();
+  await queryHandler({
+    method: "GET",
+    query: { taskId: created.body.taskId, pollToken: created.body.pollToken },
+  }, forbidden);
+
+  assert.equal(forbidden.statusCode, 403);
+  assert.equal(forbidden.body.code, "invalid_task_token");
 });
 
 test("memory limiter enforces both authenticated-user and IP generation budgets", () => {

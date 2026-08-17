@@ -1,4 +1,8 @@
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { generateDrinkImage, queryDrinkImage } from "./drink-image.mjs";
+import { requireAuthenticatedUser } from "./auth.mjs";
+
+const POLL_TOKEN_TTL_MS = 24 * 60 * 60_000;
 
 const RATE_POLICIES = Object.freeze({
   generate: { windowMs: 10 * 60_000, perUser: 8, perIp: 16 },
@@ -40,17 +44,39 @@ const normalizedUserId = (identity) => {
   return value.trim();
 };
 
-// Integration seam for a verified server-side session. Deliberately never reads
-// body.userId, query.userId, or any other client-asserted identity.
-export const authenticateFromServerContext = async (request) => {
-  const identity = request.auth;
-  if (!identity) {
-    throw new MediaApiError("图片生成接口尚未接入服务端登录校验。", {
-      statusCode: 503,
-      code: "authentication_not_configured",
-    });
+const subjectDigest = (userId) => createHash("sha256").update(userId).digest("base64url");
+
+const signPollToken = ({ taskId, userId, expiresAt }, secret) => {
+  if (!secret) throw new MediaApiError("服务端尚未配置媒体任务签名密钥。", {
+    statusCode: 503,
+    code: "SERVICE_NOT_CONFIGURED",
+  });
+  const payload = Buffer.from(JSON.stringify({
+    taskId,
+    subject: subjectDigest(userId),
+    expiresAt,
+  })).toString("base64url");
+  const signature = createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+};
+
+const verifyPollToken = ({ token, taskId, userId, now }, secret) => {
+  if (!secret || typeof token !== "string" || token.length > 1_024) return false;
+  const [payloadPart, signaturePart, extra] = token.split(".");
+  if (!payloadPart || !signaturePart || extra) return false;
+  try {
+    const expected = createHmac("sha256", secret).update(payloadPart).digest();
+    const provided = Buffer.from(signaturePart, "base64url");
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return false;
+    const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8"));
+    return payload.taskId === taskId
+      && payload.subject === subjectDigest(userId)
+      && Number.isFinite(payload.expiresAt)
+      && payload.expiresAt >= now
+      && payload.expiresAt <= now + POLL_TOKEN_TTL_MS + 5_000;
+  } catch {
+    return false;
   }
-  return identity;
 };
 
 export const createMemoryRateLimiter = ({ now = () => Date.now() } = {}) => {
@@ -107,16 +133,20 @@ const sendError = (response, error, fallbackMessage) => {
   });
 };
 
-const authenticate = async (request, authenticateRequest) => {
-  const identity = await authenticateRequest(request);
-  return normalizedUserId(identity);
+const authenticate = async (request, response, authenticateRequest) => {
+  const identity = authenticateRequest
+    ? await authenticateRequest(request)
+    : await requireAuthenticatedUser(request, response);
+  return identity ? normalizedUserId(identity) : null;
 };
 
 export const createGenerateDrinkImageHandler = ({
-  authenticateRequest = authenticateFromServerContext,
+  authenticateRequest,
   rateLimiter = createMemoryRateLimiter(),
   apiKey = process.env.EVOLINK_API_KEY,
+  signingSecret = process.env.VIDEO_TASK_SIGNING_SECRET || apiKey,
   fetchImpl = globalThis.fetch,
+  now = Date.now,
 } = {}) => async (request, response) => {
   setNoStore(response);
   if (request.method !== "POST") {
@@ -125,20 +155,28 @@ export const createGenerateDrinkImageHandler = ({
   }
 
   try {
-    const userId = await authenticate(request, authenticateRequest);
+    const userId = await authenticate(request, response, authenticateRequest);
+    if (!userId) return undefined;
     await rateLimiter.consume({ action: "generate", userId, ip: requestIp(request) });
     const task = await generateDrinkImage(request.body, apiKey, { fetchImpl });
-    return response.status(202).json(task);
+    const pollToken = signPollToken({
+      taskId: task.taskId,
+      userId,
+      expiresAt: now() + POLL_TOKEN_TTL_MS,
+    }, signingSecret);
+    return response.status(202).json({ ...task, pollToken, pollAfterMs: 2_500 });
   } catch (error) {
     return sendError(response, error, "图片任务暂时创建不了，请稍后再试。");
   }
 };
 
 export const createMediaTaskHandler = ({
-  authenticateRequest = authenticateFromServerContext,
+  authenticateRequest,
   rateLimiter = createMemoryRateLimiter(),
   apiKey = process.env.EVOLINK_API_KEY,
+  signingSecret = process.env.VIDEO_TASK_SIGNING_SECRET || apiKey,
   fetchImpl = globalThis.fetch,
+  now = Date.now,
 } = {}) => async (request, response) => {
   setNoStore(response);
   if (request.method !== "GET") {
@@ -147,9 +185,17 @@ export const createMediaTaskHandler = ({
   }
 
   try {
-    const userId = await authenticate(request, authenticateRequest);
+    const userId = await authenticate(request, response, authenticateRequest);
+    if (!userId) return undefined;
     await rateLimiter.consume({ action: "query", userId, ip: requestIp(request) });
     const taskId = Array.isArray(request.query?.taskId) ? "" : request.query?.taskId;
+    const pollToken = Array.isArray(request.query?.pollToken) ? "" : request.query?.pollToken;
+    if (!verifyPollToken({ token: pollToken, taskId, userId, now: now() }, signingSecret)) {
+      throw new MediaApiError("任务查询凭证无效或已过期。", {
+        statusCode: 403,
+        code: "invalid_task_token",
+      });
+    }
     const task = await queryDrinkImage(taskId, apiKey, { fetchImpl });
     return response.status(200).json(task);
   } catch (error) {

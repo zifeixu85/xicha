@@ -4,7 +4,7 @@ import { requireAuthenticatedUser } from "../server/auth.mjs";
 export const config = { maxDuration: 30 };
 
 export default async function handler(request, response) {
-  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Cache-Control", "no-store, max-age=0");
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
     return response.status(405).json({ error: "只支持 POST 请求" });
@@ -20,6 +20,7 @@ export default async function handler(request, response) {
     console.error("Speech API failed", error);
     return response.status(error.statusCode || 502).json({
       error: error.statusCode ? error.message : "签语语音暂时生成不了，请稍后再试。",
+      code: error.statusCode === 400 ? "INVALID_REQUEST" : error.statusCode === 403 ? "INVALID_SPEECH_TICKET" : "SPEECH_FAILED",
     });
   }
 }

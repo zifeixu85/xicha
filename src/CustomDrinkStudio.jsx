@@ -24,6 +24,7 @@ import {
   createDrinkVideoTask,
   createVideoFrameTask,
   waitForMediaTask,
+  waitForVideoTask,
 } from "./custom-drink-api";
 import {
   customDrinkGroups,
@@ -37,7 +38,7 @@ import {
 
 const initialMedia = { status: "idle", progress: 0, url: "", message: "" };
 
-const mediaUrl = (payload) => payload.url || payload.resultUrl || payload.output?.url || payload.result?.url || "";
+const mediaUrl = (payload) => payload.url || payload.resultUrl || payload.results?.[0] || payload.output?.url || payload.result?.url || "";
 
 function LockedPreview({ onLogin }) {
   return (
@@ -83,7 +84,7 @@ function ProgressTicket({ icon, title, detail, progress, status, onRetry }) {
   );
 }
 
-export default function CustomDrinkStudio({ user, getToken, onLogin }) {
+export default function CustomDrinkStudio({ user, getSession, onLogin }) {
   const [selection, setSelection] = useState(makeEmptySelection);
   const [sweetness, setSweetness] = useState("微微甜");
   const [temperature, setTemperature] = useState("少冰");
@@ -137,13 +138,19 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
     noticeTimer.current = window.setTimeout(() => setNotice(""), 2600);
   };
 
+  const reopenLoginIfNeeded = (error) => {
+    if (error?.code === "AUTH_REQUIRED" || error?.statusCode === 401) {
+      onLogin();
+      return true;
+    }
+    return false;
+  };
+
   const withController = () => {
     const controller = new AbortController();
     controllersRef.current.add(controller);
     return controller;
   };
-
-  const tokenForRequest = async () => (await getToken?.()) || "";
 
   const toggleOption = (groupId, optionId) => {
     const current = selection[groupId] || [];
@@ -187,13 +194,13 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
     flash("灵感替你抓好一把配料");
   };
 
-  const generateImage = async (drink, token, run) => {
+  const generateImage = async (drink, moodNote, run) => {
     const controller = withController();
     setImage({ status: "loading", progress: 7, url: "", message: "正在画杯身与风味层次" });
     try {
-      const started = await createDrinkImageTask({ drink }, token, controller.signal);
+      const started = await createDrinkImageTask({ drink, moodNote }, getSession, controller.signal);
       if (!started.taskId) throw new Error("图片任务没有返回编号");
-      const finished = await waitForMediaTask(started.taskId, token, controller.signal, (progress) => {
+      const finished = await waitForMediaTask(started, getSession, controller.signal, (progress) => {
         if (run === runRef.current) setImage((value) => ({ ...value, progress, message: progress > 64 ? "正在收拾高光与杯壁水汽" : "正在画杯身与风味层次" }));
       });
       const url = mediaUrl(finished);
@@ -202,6 +209,7 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
       setImage({ status: "ready", progress: 100, url, message: "饮品图已完成" });
     } catch (error) {
       if (error.name !== "AbortError" && run === runRef.current) {
+        reopenLoginIfNeeded(error);
         setImage({ status: "error", progress: 0, url: "", message: error.message || "饮品图没有画完" });
       }
     } finally {
@@ -217,16 +225,18 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
     const controller = withController();
     setCreation({ status: "loading", data: null, message: "AI 正在读配方，也在读你写下的这一刻…" });
     try {
-      const token = await tokenForRequest();
+      const creationNote = note.trim();
       const ingredients = selectionToPayload(selection, sweetness, temperature);
-      const data = await createCustomDrink({ ingredients, note: note.trim() }, token, controller.signal);
+      const data = await createCustomDrink({ ingredients, note: creationNote }, getSession, controller.signal);
       if (run !== runRef.current) return;
       if (!data.drink?.name || !data.blessing) throw new Error("饮品签笺内容不完整，请重新创作");
-      setCreation({ status: "ready", data, message: "" });
+      const creationData = { ...data, moodNote: creationNote };
+      setCreation({ status: "ready", data: creationData, message: "" });
       setSpeech({ status: "idle", url: "", message: "" });
-      await generateImage(data.drink, token, run);
+      await generateImage(data.drink, creationNote, run);
     } catch (error) {
       if (error.name !== "AbortError" && run === runRef.current) {
+        reopenLoginIfNeeded(error);
         setCreation({ status: "error", data: null, message: error.message || "配方没有写完，请再试一次" });
       }
     } finally {
@@ -237,7 +247,7 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
   const retryImage = async () => {
     if (!user || !creation.data?.drink) return onLogin();
     const run = runRef.current;
-    await generateImage(creation.data.drink, await tokenForRequest(), run);
+    await generateImage(creation.data.drink, creation.data.moodNote || "", run);
   };
 
   const toggleSpeech = async () => {
@@ -252,14 +262,17 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
     const run = runRef.current;
     setSpeech({ status: "loading", url: "", message: "正在请温柔女声读签…" });
     try {
-      const result = await createCustomSpeech({ text: creation.data.blessing, token: creation.data.speechTicket }, await tokenForRequest(), controller.signal);
+      const result = await createCustomSpeech({ text: creation.data.blessing, token: creation.data.speechTicket }, getSession, controller.signal);
       if (run !== runRef.current || !result.audio) return;
       setSpeech({ status: "ready", url: result.audio, message: "" });
       audioRef.current.src = result.audio;
       audioRef.current.load();
       await audioRef.current.play();
     } catch (error) {
-      if (error.name !== "AbortError" && run === runRef.current) setSpeech({ status: "error", url: "", message: error.message || "祝福暂时读不出来" });
+      if (error.name !== "AbortError" && run === runRef.current) {
+        reopenLoginIfNeeded(error);
+        setSpeech({ status: "error", url: "", message: error.message || "祝福暂时读不出来" });
+      }
     } finally {
       controllersRef.current.delete(controller);
     }
@@ -270,15 +283,20 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
     if (!image.url || !creation.data?.drink) return;
     stopAll(false);
     const run = runRef.current;
-    const token = await tokenForRequest();
     const frameController = withController();
     let videoController;
     let stage = "frame";
     setFrame({ status: "loading", progress: 5, url: "", message: "阶段 1 / 2 · 正在扩展 16:9 广告首帧" });
     setVideo(initialMedia);
     try {
-      const frameTask = await createVideoFrameTask({ imageUrl: image.url, drink: creation.data.drink }, token, frameController.signal);
-      const frameResult = frameTask.url ? frameTask : await waitForMediaTask(frameTask.taskId, token, frameController.signal, (progress) => {
+      const videoDrink = {
+        name: creation.data.drink.name,
+        category: "自创饮品",
+        summary: creation.data.drink.summary || "",
+        layers: creation.data.drink.receipt || creation.data.drink.ingredients || [],
+      };
+      const frameTask = await createVideoFrameTask({ imageUrl: image.url, drink: videoDrink, moodNote: creation.data.moodNote || "" }, getSession, frameController.signal);
+      const frameResult = frameTask.resultUrl ? frameTask : await waitForVideoTask(frameTask, getSession, frameController.signal, (progress) => {
         if (run === runRef.current) setFrame((value) => ({ ...value, progress }));
       });
       const frameUrl = mediaUrl(frameResult);
@@ -290,8 +308,8 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
       videoController = withController();
       stage = "video";
       setVideo({ status: "loading", progress: 6, url: "", message: "阶段 2 / 2 · 正在生成 720p · 5 秒宣传片" });
-      const videoTask = await createDrinkVideoTask({ frameUrl, drink: creation.data.drink, duration: 5, resolution: "720p" }, token, videoController.signal);
-      const videoResult = videoTask.url ? videoTask : await waitForMediaTask(videoTask.taskId, token, videoController.signal, (progress) => {
+      const videoTask = await createDrinkVideoTask({ frameUrl, drink: videoDrink, moodNote: creation.data.moodNote || "" }, getSession, videoController.signal);
+      const videoResult = videoTask.resultUrl ? videoTask : await waitForVideoTask(videoTask, getSession, videoController.signal, (progress) => {
         if (run === runRef.current) setVideo((value) => ({ ...value, progress }));
       });
       const url = mediaUrl(videoResult);
@@ -299,6 +317,7 @@ export default function CustomDrinkStudio({ user, getToken, onLogin }) {
       if (run === runRef.current) setVideo({ status: "ready", progress: 100, url, message: "5 秒宣传片已完成" });
     } catch (error) {
       if (error.name !== "AbortError" && run === runRef.current) {
+        reopenLoginIfNeeded(error);
         if (stage === "video") setVideo({ status: "error", progress: 0, url: "", message: error.message });
         else setFrame({ status: "error", progress: 0, url: "", message: error.message || "宣传片制作中断" });
       }

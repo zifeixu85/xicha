@@ -272,16 +272,9 @@ function App({ auth }) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const getSessionToken = async () => {
-    if (auth.qaToken) return auth.qaToken;
-    const current = await neonClient?.auth.getSession();
-    return current?.data?.session?.token
-      || current?.data?.session?.accessToken
-      || current?.data?.token
-      || auth.session?.session?.token
-      || auth.session?.session?.accessToken
-      || "";
-  };
+  const getLatestSession = () => auth.qaToken
+    ? Promise.resolve({ data: { session: { token: auth.qaToken } } })
+    : neonClient.auth.getSession();
 
   const notify = (message) => {
     setToast(message);
@@ -469,7 +462,7 @@ function App({ auth }) {
         signal: controller.signal,
       }, {
         session: auth.session,
-        getSession: () => neonClient.auth.getSession(),
+        getSession: getLatestSession,
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -758,7 +751,7 @@ function App({ auth }) {
         </section>
           </>
         ) : (
-          <CustomDrinkStudio user={user} getToken={getSessionToken} onLogin={() => setSheet("auth")} />
+          <CustomDrinkStudio user={user} getSession={getLatestSession} onLogin={() => setSheet("auth")} />
         )}
       </main>
 

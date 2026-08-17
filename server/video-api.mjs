@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import express from "express";
+import { requireAuthenticatedUser } from "./auth.mjs";
 import {
   VideoServiceError,
   createVideoFrameTask,
@@ -9,10 +10,10 @@ import {
 
 const POLL_TOKEN_TTL_MS = 24 * 60 * 60_000;
 
-export const defaultVideoAuthGuard = async (request) => request.auth?.user
-  || request.auth
-  || request.user
-  || null;
+export const defaultVideoAuthGuard = async (request, response) => {
+  const auth = await requireAuthenticatedUser(request, response);
+  return auth?.user || null;
+};
 
 const principalIdOf = (principal) => {
   const value = typeof principal === "string"
@@ -63,6 +64,7 @@ const verifyTaskToken = ({ token, taskId, taskType, principalId, now }, secret) 
 };
 
 const sendError = (response, error) => {
+  if (response.headersSent) return undefined;
   const known = error instanceof VideoServiceError;
   return response.status(known ? error.statusCode : 502).json({
     error: known ? error.message : "视频服务暂时不可用，请稍后重试",
@@ -77,12 +79,17 @@ export const createVideoHandlers = ({
   clientOptions = {},
   now = Date.now,
 } = {}) => {
-  const authenticate = async (request) => principalIdOf(await authGuard(request));
+  const authenticate = async (request, response) => {
+    const principal = await authGuard(request, response);
+    return principal ? principalIdOf(principal) : null;
+  };
 
   const create = (operation) => async (request, response) => {
-    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("Cache-Control", "no-store, max-age=0");
+    response.setHeader("Pragma", "no-cache");
     try {
-      const principalId = await authenticate(request);
+      const principalId = await authenticate(request, response);
+      if (!principalId) return undefined;
       const result = operation === "frame"
         ? await createVideoFrameTask(request.body, apiKey, clientOptions)
         : await createVideoTask(request.body, apiKey, clientOptions);
@@ -99,9 +106,11 @@ export const createVideoHandlers = ({
   };
 
   const getTask = async (request, response) => {
-    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("Cache-Control", "no-store, max-age=0");
+    response.setHeader("Pragma", "no-cache");
     try {
-      const principalId = await authenticate(request);
+      const principalId = await authenticate(request, response);
+      if (!principalId) return undefined;
       const taskId = request.query?.taskId;
       const taskType = request.query?.taskType;
       const pollToken = request.query?.pollToken;
@@ -146,6 +155,8 @@ export const createVercelVideoHandler = (operation, dependencies = {}) => {
       : handlers.getTask;
 
   return async (request, response) => {
+    response.setHeader("Cache-Control", "no-store, max-age=0");
+    response.setHeader("Pragma", "no-cache");
     if (request.method !== method) {
       response.setHeader("Allow", method);
       return response.status(405).json({ error: `只支持 ${method} 请求`, code: "method_not_allowed" });
