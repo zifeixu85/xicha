@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-开发服务器会同时提供 Vite 页面与同源的 `/api/blessing` 服务，默认地址为 `http://localhost:5173`。
+开发服务器会同时提供 Vite 页面与同源 API，默认地址为 `http://localhost:5173`。
 
 生产构建：
 
@@ -29,6 +29,7 @@ npm run preview
 - 五类原创手绘饮品插画与响应式动效界面
 - 可选填写 120 字以内的此刻近况，每次随机后由 DeepSeek V4 Pro 结合饮品、当地时间与用户心情生成不重复签语
 - 首次点击时按需调用 MiniMax 生成温柔女声签语，当前签语内缓存并支持暂停、继续与重播
+- 服务端可根据结构化饮品信息创建 Evolink 异步产品图任务并查询结果
 - 内置菜单资料来源与门店可售提示
 
 ## Neon 登录与云端收藏
@@ -58,11 +59,12 @@ NEON_AUTH_URL=同一个 Auth URL（服务端）
 DATABASE_URL=你的 pooled connection string
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
 MINIMAX_API_KEY=你的 MiniMax API Key
+EVOLINK_API_KEY=你的 Evolink API Key
 ```
 
 `VITE_` 开头的两个值是浏览器可用的公开服务地址。`NEON_AUTH_URL` 是同一个 Neon Auth 公开地址的服务端副本，用于定位 JWKS；本地未设置时会回退到 `VITE_NEON_AUTH_URL`，生产环境建议显式设置。`DATABASE_URL` 含数据库密码，只能放在本地或部署平台的服务端环境变量中，不能改名为 `VITE_DATABASE_URL`。
 
-`DEEPSEEK_API_KEY` 和 `MINIMAX_API_KEY` 都只能配置在服务端。浏览器分别请求同源的 `/api/blessing` 与 `/api/speech`，服务端再调用 `deepseek-v4-pro` 和 MiniMax `speech-2.8-hd`，因此 Key 不会进入前端构建产物。语音只在用户点击播放后生成，MiniMax 返回的临时 URL 仅缓存于当前页面、当前签语；重新摇签会终止旧请求并清空音频。部署到 Vercel 时，同样需要配置这两个服务端环境变量，以及 `NEON_AUTH_URL`。
+`DEEPSEEK_API_KEY`、`MINIMAX_API_KEY` 和 `EVOLINK_API_KEY` 都只能配置在服务端。浏览器分别请求同源 API，服务端再调用 `deepseek-v4-pro`、MiniMax `speech-2.8-hd` 和 Evolink `gpt-image-2-beta`，因此 Key 不会进入前端构建产物。语音只在用户点击播放后生成，MiniMax 返回的临时 URL 仅缓存于当前页面、当前签语；重新摇签会终止旧请求并清空音频。部署到 Vercel 时，同样需要配置这些服务端环境变量，以及用于 JWKS 验签的 `NEON_AUTH_URL`。
 
 祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本；这个 HMAC 凭证与登录校验是两道独立检查。心情输入第一版只随本次请求发送，不写入账号数据库或本地存储。
 
@@ -108,5 +110,52 @@ npm run dev
 ```
 
 注册两个测试账号，分别收藏不同饮品；互相登录时不应看到对方的收藏。部署到 Vercel 等平台时，需要配置两个 `VITE_NEON_*` 环境变量，并将正式域名加入 Neon Auth Allowed origins。部署环境不需要 `DATABASE_URL`，除非在那里运行迁移。
+
+## 饮品图片异步 API
+
+Express 开发服务器和 Vercel Functions 提供相同的两个端点。所有响应（包括错误）都带 `Cache-Control: no-store`；错误使用中文安全文案，不转发 Evolink 的原始错误详情。上游字段约束以 [Evolink GPT Image 2 Beta 官方文档](https://evolink.ai/docs/cn/api-manual/image-series/gpt-image-2/gpt-image-2-beta-image-generation) 为准。
+
+### 创建任务
+
+`POST /api/generate-drink-image`
+
+请求体只接受结构化字段，不接受 `prompt` 或其他额外字段：
+
+```json
+{
+  "name": "晚霞葡萄气泡茶",
+  "ingredients": ["葡萄果肉", "茉莉茶汤", "气泡水"],
+  "moodNote": "庆祝今天完成了一件难事",
+  "colorFlavor": "紫粉渐变，酸甜清爽"
+}
+```
+
+- `name`：必填，最多 40 字。
+- `ingredients`：必填，1–12 项，每项最多 36 字。
+- `moodNote`：可选，用户心情或一句话，最多 120 字。
+- `colorFlavor`：可选，颜色与风味描述，最多 180 字。
+
+服务端把这些字段作为不可信素材标签嵌入固定模板，不执行字段内的指令。Evolink 请求固定使用 `gpt-image-2-beta`、`size: "1:1"`、`resolution: "1K"` 和 `n: 1`。成功时返回 HTTP 202：
+
+```json
+{
+  "taskId": "task-unified-...",
+  "status": "pending",
+  "progress": 0,
+  "results": []
+}
+```
+
+### 查询任务
+
+`GET /api/media-task?taskId=task-unified-...`
+
+返回 HTTP 200。`status` 为 `pending`、`processing`、`completed` 或 `failed`；完成后 `results` 含唯一的 HTTPS 图片地址，失败时包含中文 `error`。结果 URL 由 Evolink 托管且仅约 24 小时有效，消费方应及时转存，不能把它当永久资源。
+
+### 认证与限流集成
+
+两个 handler 都由工厂创建，并接受 `authenticateRequest(request)` 注入。该函数必须在服务端校验会话，并返回 `{ userId }` 或 `{ user: { id } }`；接口从不信任请求体或查询参数中的 `userId`。当前基线只有浏览器侧 Neon Auth，没有服务端会话校验模块，因此默认实现只接受认证中间件写入的 `request.auth`，缺失时会安全地返回 503。接入主应用时应注入正式 Neon 服务端认证适配，不能把客户端声明的用户 ID 直接写入 `request.auth`。
+
+默认内存限流同时按已认证用户和 IP 计数：创建任务每 10 分钟每用户 8 次、每 IP 16 次；查询每 10 分钟每用户 120 次、每 IP 240 次。它适合单进程开发环境；多实例 Vercel 部署应把 handler 的 `rateLimiter` 注入替换成带异步 `consume({ action, userId, ip })` 的共享存储实现，以获得全局限流。
 
 > 本项目不是喜茶官方产品。饮品、原料及可选项以喜茶小程序和门店当日页面为准。

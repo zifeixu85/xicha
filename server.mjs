@@ -5,6 +5,11 @@ import path from "node:path";
 import { generateBlessing } from "./server/blessing.mjs";
 import { createSpeechToken, generateSpeech } from "./server/speech.mjs";
 import { requireAuthenticatedUser } from "./server/auth.mjs";
+import {
+  createGenerateDrinkImageHandler,
+  createMediaTaskHandler,
+  createMemoryRateLimiter,
+} from "./server/media-api.mjs";
 
 const app = express();
 const port = Number(process.env.PORT) || 5173;
@@ -12,6 +17,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const isProduction = process.env.NODE_ENV === "production";
 const requestWindows = new Map();
 const speechWindows = new Map();
+const mediaRateLimiter = createMemoryRateLimiter();
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "16kb" }));
@@ -63,6 +69,12 @@ app.post("/api/speech", async (request, response) => {
     });
   }
 });
+
+// A future verified Neon server-session middleware can set request.auth or
+// inject authenticateRequest into these handler factories. Client userId values
+// are intentionally never trusted.
+app.post("/api/generate-drink-image", createGenerateDrinkImageHandler({ rateLimiter: mediaRateLimiter }));
+app.get("/api/media-task", createMediaTaskHandler({ rateLimiter: mediaRateLimiter }));
 
 if (isProduction) {
   app.use(express.static(path.join(root, "dist")));
