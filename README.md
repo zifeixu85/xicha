@@ -30,6 +30,7 @@ npm run preview
 - 可选填写 120 字以内的此刻近况，每次随机后由 DeepSeek V4 Pro 结合饮品、当地时间与用户心情生成不重复签语
 - 首次点击时按需调用 MiniMax 生成温柔女声签语，当前签语内缓存并支持暂停、继续与重播
 - 服务端可根据结构化饮品信息创建 Evolink 异步产品图任务并查询结果
+- Evolink 两阶段宣传片后端：先把方形饮品图扩成 16:9 广告首帧，再生成 720p、5 秒视频
 - 内置菜单资料来源与门店可售提示
 
 ## Neon 登录与云端收藏
@@ -60,6 +61,7 @@ DATABASE_URL=你的 pooled connection string
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
 MINIMAX_API_KEY=你的 MiniMax API Key
 EVOLINK_API_KEY=你的 Evolink API Key
+VIDEO_TASK_SIGNING_SECRET=随机长字符串
 ```
 
 `VITE_` 开头的两个值是浏览器可用的公开服务地址。`NEON_AUTH_URL` 是同一个 Neon Auth 公开地址的服务端副本，用于定位 JWKS；本地未设置时会回退到 `VITE_NEON_AUTH_URL`，生产环境建议显式设置。`DATABASE_URL` 含数据库密码，只能放在本地或部署平台的服务端环境变量中，不能改名为 `VITE_DATABASE_URL`。
@@ -92,6 +94,61 @@ if (!auth) return;
 ```
 
 这段接口同时兼容 Express 的 `request/response` 和 Vercel Node handlers；测试时也可以向 `authenticateRequest` 注入本地 JWKS key set，不需要绕过生产验证逻辑。
+
+## Evolink 饮品宣传片后端
+
+宣传片严格分为两个异步阶段，不能跳过第一阶段后把 1:1 原图直接交给视频模型：
+
+1. `POST /api/generate-video-frame` 使用固定的 `gpt-image-2-beta`、`size: "16:9"`、`resolution: "1K"`，对已完成的方形饮品图做编辑与扩图。
+2. 浏览器用 `GET /api/video-task` 查询首帧任务；完成后取得 `resultUrl`。
+3. `POST /api/generate-drink-video` 使用该 16:9 首帧，固定调用 `happyhorse-1.1-image-to-video`、`quality: "720p"`、`duration: 5`。视频请求不发送 `aspect_ratio`，比例继承首帧。
+4. 浏览器继续查询视频任务，并在完成后尽快保存 `resultUrl`；Evolink 视频结果地址仅临时有效。
+
+两个创建接口都只接受以下业务字段，不接受客户端覆盖模型、画幅、清晰度、时长、回调地址或用户身份：
+
+```json
+{
+  "imageUrl": "https://cdn.your-domain.com/drink.png",
+  "drink": {
+    "name": "多肉葡萄",
+    "category": "果茶",
+    "summary": "葡萄果肉与清爽茶底",
+    "layers": ["葡萄果肉", "绿妍茶汤", "芝士云顶"]
+  },
+  "moodNote": "今天终于完成了一个重要项目，很轻松。"
+}
+```
+
+第二阶段把 `imageUrl` 改为 `frameUrl`。URL 必须是可公开解析的 HTTPS 地址；服务端会限制字段、文本长度，并拒绝本地、内网、保留地址和未知参数。
+
+创建成功返回 HTTP 202：
+
+```json
+{
+  "taskId": "task-unified-...",
+  "taskType": "image",
+  "stage": "frame",
+  "status": "pending",
+  "progress": 0,
+  "resultUrl": null,
+  "pollToken": "短期签名查询凭证",
+  "pollAfterMs": 2500
+}
+```
+
+查询方式为 `GET /api/video-task?taskId=...&taskType=image&pollToken=...`。状态统一为 `pending`、`processing`、`completed`、`failed` 或 `cancelled`；终态的 `pollAfterMs` 为 `null`。首帧完成后返回 `taskType: "image"`、`stage: "frame"`，视频完成后返回 `taskType: "video"`、`stage: "video"`。
+
+所有视频接口默认要求上游鉴权把已验证主体放到 `request.auth` 或 `request.user`。也可以在合并认证分支时通过 `createVideoRouter({ authGuard })`，或三个 Vercel 文件导出的 `createHandler({ authGuard })` 注入异步 guard；guard 必须返回包含 `id`、`userId` 或 `sub` 的服务端验证主体。请求体中的 `userId` 会被当作未知字段拒绝。轮询凭证用 `VIDEO_TASK_SIGNING_SECRET`（未配置时回退到服务端 Evolink Key）签名并绑定该主体，不能跨账号查询。
+
+便于其他分支直接复用的底层契约位于 `server/video.mjs`：
+
+```js
+createVideoFrameTask({ imageUrl, drink, moodNote }, apiKey, options)
+createVideoTask({ frameUrl, drink, moodNote }, apiKey, options)
+queryTask(taskId, "image" | "video", apiKey, options)
+```
+
+`options` 只用于服务端测试或基础设施注入（如 `fetchImpl`、DNS lookup 和请求超时），不会从 HTTP 请求透传。
 
 ### 3. 创建收藏表与 RLS
 
