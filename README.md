@@ -32,6 +32,12 @@ npm run preview
 - 服务端可根据结构化饮品信息创建 Evolink 异步产品图任务并查询结果
 - Evolink 两阶段宣传片后端：先把方形饮品图扩成 16:9 广告首帧，再生成 720p、5 秒视频
 - 内置菜单资料来源与门店可售提示
+- “随机灵感 / 自创一杯”双模式切换；自创模式仅登录用户可用
+- 自创配方桌提供 40+ 项茶底、乳基底、鲜果、香气、小料和云顶选择，并校验数量、0 咖与高酸鲜乳等冲突
+- 自创结果包含原创饮品名、风味摘要、标签、配料小票和祝福，明确标记为“AI 概念特调”
+- 自创饮品图使用异步任务轮询、进度骨架和失败重试；完成后可继续制作 16:9、720p、5 秒宣传片
+- 图片与视频标注约 24 小时有效，提供浏览器支持范围内的保存、打开和下载入口
+- 模式切换、重新创作和组件卸载会终止旧请求、轮询及音视频，避免旧作品覆盖新结果
 
 ## Neon 登录与云端收藏
 
@@ -150,6 +156,17 @@ queryTask(taskId, "image" | "video", apiKey, options)
 
 `options` 只用于服务端测试或基础设施注入（如 `fetchImpl`、DNS lookup 和请求超时），不会从 HTTP 请求透传。
 
+自创饮品文本由 `POST /api/create-custom-drink` 提供。服务端只把经过长度与结构清洗的配料/心情放入 user message，使用严格 JSON 输出并在格式异常时安全回落；图片与视频描述由服务端模板结合已审核的饮品文案构造，不会把用户文本作为 system instruction。前端媒体 adapter 预留以下集成契约：
+
+- `POST /api/generate-drink-image` → `{ taskId }`
+- `GET /api/media-task?taskId=...` → `{ status, progress, url? }`
+- `POST /api/generate-video-frame` → `{ taskId }`（扩展 16:9 首帧）
+- `POST /api/generate-drink-video` → `{ taskId }`（720p、5 秒）
+
+所有自创生成请求都会在会话可用时发送 `Authorization: Bearer <session token>`。当前分支实现前端门禁；媒体任务及各自创接口的服务端鉴权应在后续集成时强制执行。
+
+祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本。心情输入第一版只随本次请求发送，不写入账号数据库或本地存储。
+
 ### 3. 创建收藏表与 RLS
 
 确保已经先开启 Neon Auth，然后执行：
@@ -216,3 +233,23 @@ Express 开发服务器和 Vercel Functions 提供相同的两个端点。所有
 默认内存限流同时按已认证用户和 IP 计数：创建任务每 10 分钟每用户 8 次、每 IP 16 次；查询每 10 分钟每用户 120 次、每 IP 240 次。它适合单进程开发环境；多实例 Vercel 部署应把 handler 的 `rateLimiter` 注入替换成带异步 `consume({ action, userId, ip })` 的共享存储实现，以获得全局限流。
 
 > 本项目不是喜茶官方产品。饮品、原料及可选项以喜茶小程序和门店当日页面为准。
+
+## 测试
+
+服务端单元测试与生产构建：
+
+```bash
+npm test
+npm run build
+```
+
+Playwright mock 验收使用测试构建专用的内存会话注入；常规 `npm run build` 会在编译期移除该入口。先生成一次测试构建并启动，再运行浏览器脚本：
+
+```bash
+VITE_QA_SESSION=true npm run build
+PORT=4173 npm start
+# 另一个终端
+npm run test:e2e
+```
+
+脚本覆盖未登录门禁、登录创作、配料限制、心情请求、图片轮询与失败重试、语音、视频两阶段、Bearer header、竞争取消、桌面截图、390px 截图、横向溢出和控制台错误。

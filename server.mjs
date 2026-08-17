@@ -11,6 +11,7 @@ import {
   createMemoryRateLimiter,
 } from "./server/media-api.mjs";
 import { createVideoRouter } from "./server/video-api.mjs";
+import { generateCustomDrink } from "./server/custom-drink.mjs";
 
 const app = express();
 const port = Number(process.env.PORT) || 5173;
@@ -19,6 +20,7 @@ const isProduction = process.env.NODE_ENV === "production";
 const requestWindows = new Map();
 const speechWindows = new Map();
 const mediaRateLimiter = createMemoryRateLimiter();
+const customDrinkWindows = new Map();
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "16kb" }));
@@ -77,6 +79,27 @@ app.post("/api/speech", async (request, response) => {
 // are intentionally never trusted.
 app.post("/api/generate-drink-image", createGenerateDrinkImageHandler({ rateLimiter: mediaRateLimiter }));
 app.get("/api/media-task", createMediaTaskHandler({ rateLimiter: mediaRateLimiter }));
+
+app.post("/api/create-custom-drink", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  const now = Date.now();
+  const client = request.ip || "local";
+  const recentRequests = (customDrinkWindows.get(client) || []).filter((time) => now - time < 10 * 60_000);
+  if (recentRequests.length >= 20) return response.status(429).json({ error: "创作有点频繁，歇一会儿再来吧。" });
+  customDrinkWindows.set(client, [...recentRequests, now]);
+  try {
+    const result = await generateCustomDrink(request.body, process.env.DEEPSEEK_API_KEY);
+    return response.json({
+      ...result,
+      speechTicket: createSpeechToken(result.blessing, process.env.MINIMAX_API_KEY),
+    });
+  } catch (error) {
+    console.error("Custom drink API failed", error);
+    return response.status(error.statusCode || 502).json({
+      error: error.statusCode ? error.message : "自创饮品签笺暂时没有写完，请稍后再试。",
+    });
+  }
+});
 
 if (isProduction) {
   app.use(express.static(path.join(root, "dist")));

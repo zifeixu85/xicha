@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowUpRight,
+  Beaker,
   BookOpen,
   Check,
   ChevronRight,
@@ -19,11 +20,13 @@ import {
   Play,
   RotateCcw,
   Share2,
+  Shuffle,
   Sparkles,
   UserRound,
   Volume2,
   X,
 } from "lucide-react";
+import CustomDrinkStudio from "./CustomDrinkStudio";
 import {
   addFavorite,
   deleteFavorite,
@@ -203,6 +206,7 @@ function Splash({ hiding }) {
 }
 
 function App({ auth }) {
+  const [mode, setMode] = useState("random");
   const [mood, setMood] = useState("all");
   const [recipe, setRecipe] = useState(() => pickRandom(recipes));
   const [rolling, setRolling] = useState(false);
@@ -253,11 +257,31 @@ function App({ auth }) {
   useEffect(() => {
     const onKey = (event) => {
       if (event.key === "Escape") setSheet(null);
-      if (event.key.toLowerCase() === "r" && !sheet) roll();
+      if (event.key.toLowerCase() === "r" && !sheet && mode === "random") roll();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  const switchMode = (nextMode) => {
+    if (nextMode === mode) return;
+    blessingGeneration.current += 1;
+    blessingController.current?.abort();
+    resetSpeech();
+    setMode(nextMode);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const getSessionToken = async () => {
+    if (auth.qaToken) return auth.qaToken;
+    const current = await neonClient?.auth.getSession();
+    return current?.data?.session?.token
+      || current?.data?.session?.accessToken
+      || current?.data?.token
+      || auth.session?.session?.token
+      || auth.session?.session?.accessToken
+      || "";
+  };
 
   const notify = (message) => {
     setToast(message);
@@ -267,6 +291,11 @@ function App({ auth }) {
 
   useEffect(() => {
     if (auth.isPending) return undefined;
+
+    if (auth.qaToken) {
+      setSyncing(false);
+      return undefined;
+    }
 
     if (!user) {
       setSaved(readGuestFavorites());
@@ -526,7 +555,7 @@ function App({ auth }) {
       <header className="topbar">
         <a className="brand" href="#top" aria-label="回到顶部">
           <span className="brand__seal">喜</span>
-          <span><b>喜点什么？</b><small>随机搭配研究所</small></span>
+          <span><b>喜点什么？</b><small>{mode === "custom" ? "自创饮品工作台" : "随机搭配研究所"}</small></span>
         </a>
         <div className="topbar__actions">
           <button className={`account-button ${user ? "account-button--signed" : ""}`} onClick={() => setSheet("auth")} aria-label={user ? "账号与同步" : "登录同步收藏"}>
@@ -546,6 +575,12 @@ function App({ auth }) {
       </header>
 
       <main id="top">
+        <nav className="mode-switch" aria-label="选择创作模式">
+          <button type="button" className={mode === "random" ? "active" : ""} onClick={() => switchMode("random")}><Shuffle size={16} />随机灵感<small>替我摇一杯</small></button>
+          <button type="button" className={mode === "custom" ? "active" : ""} onClick={() => switchMode("custom")}><Beaker size={16} />自创一杯<small>{user ? "我的配方桌" : "登录后解锁"}</small>{!user && <LockKeyhole size={13} />}</button>
+        </nav>
+        {mode === "random" ? (
+          <>
         <section className="intro-copy">
           <span className="eyebrow"><Sparkles size={15} /> HEYTEA DIY LUCKY MIX</span>
           <h1>今天的喜茶，<em>交给灵感。</em></h1>
@@ -645,9 +680,9 @@ function App({ auth }) {
                   <button
                     type="button"
                     className={`speech-button speech-button--${speech.status}`}
-                    onClick={toggleSpeech}
+                    onClick={user ? toggleSpeech : () => setSheet("auth")}
                     disabled={speech.status === "loading"}
-                    aria-label={speech.status === "playing" ? "暂停签语" : speech.url ? "播放签语" : "生成并播放签语"}
+                    aria-label={!user ? "登录后播放签语" : speech.status === "playing" ? "暂停签语" : speech.url ? "播放签语" : "生成并播放签语"}
                   >
                     {speech.status === "loading" ? <LoaderCircle className="spin" size={16} />
                       : speech.status === "playing" ? <Pause size={16} fill="currentColor" />
@@ -721,6 +756,10 @@ function App({ auth }) {
           </ol>
           <button onClick={copyOrder}><Clipboard size={18} />复制今日点单口令</button>
         </section>
+          </>
+        ) : (
+          <CustomDrinkStudio user={user} getToken={getSessionToken} onLogin={() => setSheet("auth")} />
+        )}
       </main>
 
       <footer>
@@ -801,6 +840,9 @@ function ConnectedApp() {
 }
 
 function Root() {
+  const qaEnabled = import.meta.env.DEV || import.meta.env.VITE_QA_SESSION === "true";
+  const qaUser = qaEnabled ? globalThis.__HEY_TEA_QA_USER__ : null;
+  if (qaUser) return <App auth={{ session: { user: qaUser }, isPending: false, configured: false, qaToken: "qa-session-token" }} />;
   if (neonConfigured) return <ConnectedApp />;
   return <App auth={{ session: null, isPending: false, configured: false }} />;
 }
