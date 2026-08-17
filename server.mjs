@@ -4,6 +4,14 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { generateBlessing, generateMoodRecommendation } from "./server/blessing.mjs";
 import { createSpeechToken, generateSpeech } from "./server/speech.mjs";
+import { requireAuthenticatedUser } from "./server/auth.mjs";
+import {
+  createGenerateDrinkImageHandler,
+  createMediaTaskHandler,
+  createMemoryRateLimiter,
+} from "./server/media-api.mjs";
+import { createVideoRouter } from "./server/video-api.mjs";
+import { generateCustomDrink } from "./server/custom-drink.mjs";
 
 const app = express();
 const port = Number(process.env.PORT) || 5173;
@@ -11,22 +19,25 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const isProduction = process.env.NODE_ENV === "production";
 const requestWindows = new Map();
 const speechWindows = new Map();
+const mediaRateLimiter = createMemoryRateLimiter();
+const customDrinkWindows = new Map();
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "16kb" }));
+app.use("/api", createVideoRouter());
 
 app.post("/api/blessing", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store, max-age=0");
   const now = Date.now();
   const client = request.ip || "local";
   const recentRequests = (requestWindows.get(client) || []).filter((time) => now - time < 10 * 60_000);
   if (recentRequests.length >= 30) {
-    return response.status(429).json({ error: "摇签有点频繁，歇一会儿再来吧。" });
+    return response.status(429).json({ error: "摇签有点频繁，歇一会儿再来吧。", code: "RATE_LIMITED" });
   }
   requestWindows.set(client, [...recentRequests, now]);
 
   try {
     const result = await generateBlessing(request.body, process.env.DEEPSEEK_API_KEY);
-    response.setHeader("Cache-Control", "no-store");
     return response.json({
       ...result,
       speechToken: createSpeechToken(result.blessing, process.env.MINIMAX_API_KEY),
@@ -35,6 +46,7 @@ app.post("/api/blessing", async (request, response) => {
     console.error("Blessing API failed", error);
     return response.status(error.statusCode || 502).json({
       error: error.statusCode ? error.message : "AI 签语暂时没有摇出来，请稍后再试。",
+      code: error.statusCode === 400 ? "INVALID_REQUEST" : "BLESSING_FAILED",
     });
   }
 });
@@ -64,12 +76,15 @@ app.post("/api/recommendation", async (request, response) => {
 });
 
 app.post("/api/speech", async (request, response) => {
-  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Cache-Control", "no-store, max-age=0");
+  const auth = await requireAuthenticatedUser(request, response);
+  if (!auth) return;
+
   const now = Date.now();
   const client = request.ip || "local";
   const recentRequests = (speechWindows.get(client) || []).filter((time) => now - time < 10 * 60_000);
   if (recentRequests.length >= 20) {
-    return response.status(429).json({ error: "语音播放有点频繁，歇一会儿再试吧。" });
+    return response.status(429).json({ error: "语音播放有点频繁，歇一会儿再试吧。", code: "RATE_LIMITED" });
   }
   speechWindows.set(client, [...recentRequests, now]);
 
@@ -80,6 +95,35 @@ app.post("/api/speech", async (request, response) => {
     console.error("Speech API failed", error);
     return response.status(error.statusCode || 502).json({
       error: error.statusCode ? error.message : "签语语音暂时生成不了，请稍后再试。",
+      code: error.statusCode === 400 ? "INVALID_REQUEST" : error.statusCode === 403 ? "INVALID_SPEECH_TICKET" : "SPEECH_FAILED",
+    });
+  }
+});
+
+app.post("/api/generate-drink-image", createGenerateDrinkImageHandler({ rateLimiter: mediaRateLimiter }));
+app.get("/api/media-task", createMediaTaskHandler({ rateLimiter: mediaRateLimiter }));
+
+app.post("/api/create-custom-drink", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store, max-age=0");
+  const auth = await requireAuthenticatedUser(request, response);
+  if (!auth) return;
+
+  const now = Date.now();
+  const client = `${auth.user.id}:${request.ip || "local"}`;
+  const recentRequests = (customDrinkWindows.get(client) || []).filter((time) => now - time < 10 * 60_000);
+  if (recentRequests.length >= 20) return response.status(429).json({ error: "创作有点频繁，歇一会儿再来吧。", code: "RATE_LIMITED" });
+  customDrinkWindows.set(client, [...recentRequests, now]);
+  try {
+    const result = await generateCustomDrink(request.body, process.env.DEEPSEEK_API_KEY);
+    return response.json({
+      ...result,
+      speechTicket: createSpeechToken(result.blessing, process.env.MINIMAX_API_KEY),
+    });
+  } catch (error) {
+    console.error("Custom drink API failed", error);
+    return response.status(error.statusCode || 502).json({
+      error: error.statusCode ? error.message : "自创饮品签笺暂时没有写完，请稍后再试。",
+      code: error.statusCode === 400 ? "INVALID_REQUEST" : error.statusCode === 503 ? "SERVICE_NOT_CONFIGURED" : "CUSTOM_DRINK_FAILED",
     });
   }
 });
