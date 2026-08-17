@@ -95,7 +95,7 @@ export async function authenticateRequest(request, {
 } = {}) {
   const token = readBearerToken(request);
   const baseUrl = getAuthBaseUrl(authUrl);
-  const issuer = baseUrl.toString();
+  const issuers = [...new Set([baseUrl.origin, baseUrl.toString()])];
   const audience = baseUrl.origin;
 
   try {
@@ -103,7 +103,7 @@ export async function authenticateRequest(request, {
       token,
       keySet || getRemoteKeySet(baseUrl),
       {
-        issuer,
+        issuer: issuers,
         audience,
         currentDate: now instanceof Date ? now : new Date(now),
       },

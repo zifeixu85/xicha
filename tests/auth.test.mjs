@@ -28,9 +28,10 @@ const createNeonAuthMock = async () => {
     subject = "user-from-neon",
     expiresAt = Math.floor(NOW.getTime() / 1_000) + 900,
     claims = {},
+    issuer = AUTH_AUDIENCE,
   } = {}) => new SignJWT({ email: "signed@example.test", role: "authenticated", ...claims })
     .setProtectedHeader({ alg: "ES256", kid: "neon-test-key" })
-    .setIssuer(AUTH_URL)
+    .setIssuer(issuer)
     .setAudience(AUTH_AUDIENCE)
     .setSubject(subject)
     .setIssuedAt(Math.floor(NOW.getTime() / 1_000))
@@ -88,8 +89,8 @@ test("auth rejects an expired Neon JWT", async () => {
 
 test("auth rejects Neon anonymous tokens even when their signature is valid", async () => {
   const neon = await createNeonAuthMock();
-  for (const claims of [{ role: "anonymous" }, { role: "authenticated", isAnonymous: true }]) {
-    const token = await neon.sign({ subject: "temporary-user", claims });
+  for (const [claims, issuer] of [[{ role: "anonymous" }, AUTH_URL], [{ role: "authenticated", isAnonymous: true }, AUTH_AUDIENCE]]) {
+    const token = await neon.sign({ subject: "temporary-user", claims, issuer });
     await assert.rejects(
       authenticateRequest({ headers: { authorization: `Bearer ${token}` } }, {
         authUrl: AUTH_URL,
@@ -122,7 +123,7 @@ test("auth loads the deployed Neon JWKS path and validates the origin audience",
   const now = Math.floor(Date.now() / 1_000);
   const token = await new SignJWT({ role: "authenticated" })
     .setProtectedHeader({ alg: "ES256", kid: "remote-neon-key" })
-    .setIssuer(authUrl)
+    .setIssuer(origin)
     .setAudience(origin)
     .setSubject("remote-user")
     .setIssuedAt(now)
