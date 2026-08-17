@@ -73,7 +73,7 @@ const getAuthBaseUrl = (authUrl) => {
 };
 
 const getRemoteKeySet = (baseUrl) => {
-  const jwksUrl = new URL(`${baseUrl.toString().replace(/\/+$/, "")}/jwks`);
+  const jwksUrl = new URL(`${baseUrl.toString().replace(/\/+$/, "")}/.well-known/jwks.json`);
   const cacheKey = jwksUrl.toString();
   if (!remoteKeySets.has(cacheKey)) {
     remoteKeySets.set(cacheKey, createRemoteJWKSet(jwksUrl, { timeoutDuration: 5_000 }));
@@ -96,6 +96,7 @@ export async function authenticateRequest(request, {
   const token = readBearerToken(request);
   const baseUrl = getAuthBaseUrl(authUrl);
   const issuer = baseUrl.toString();
+  const audience = baseUrl.origin;
 
   try {
     const { payload, protectedHeader } = await jwtVerify(
@@ -103,7 +104,7 @@ export async function authenticateRequest(request, {
       keySet || getRemoteKeySet(baseUrl),
       {
         issuer,
-        audience: issuer,
+        audience,
         currentDate: now instanceof Date ? now : new Date(now),
       },
     );

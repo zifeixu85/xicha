@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import test from "node:test";
 import {
   createLocalJWKSet,
@@ -10,6 +12,7 @@ import { authenticateRequest } from "../server/auth.mjs";
 import speechHandler from "../api/speech.js";
 
 const AUTH_URL = "https://project.neonauth.example/neondb/auth";
+const AUTH_AUDIENCE = new URL(AUTH_URL).origin;
 const NOW = new Date("2026-08-17T08:00:00.000Z");
 
 const createNeonAuthMock = async () => {
@@ -28,7 +31,7 @@ const createNeonAuthMock = async () => {
   } = {}) => new SignJWT({ email: "signed@example.test", role: "authenticated", ...claims })
     .setProtectedHeader({ alg: "ES256", kid: "neon-test-key" })
     .setIssuer(AUTH_URL)
-    .setAudience(AUTH_URL)
+    .setAudience(AUTH_AUDIENCE)
     .setSubject(subject)
     .setIssuedAt(Math.floor(NOW.getTime() / 1_000))
     .setExpirationTime(expiresAt)
@@ -96,6 +99,42 @@ test("auth rejects Neon anonymous tokens even when their signature is valid", as
       (error) => error.statusCode === 401 && error.code === "AUTH_REQUIRED",
     );
   }
+});
+
+test("auth loads the deployed Neon JWKS path and validates the origin audience", async (context) => {
+  const keyPair = await generateKeyPair("ES256");
+  const publicJwk = await exportJWK(keyPair.publicKey);
+  let requestedPath = "";
+  const server = createServer((request, response) => {
+    requestedPath = request.url || "";
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({
+      keys: [{ ...publicJwk, alg: "ES256", kid: "remote-neon-key", use: "sig" }],
+    }));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  context.after(() => server.close());
+
+  const address = server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  const authUrl = `${origin}/neondb/auth`;
+  const now = Math.floor(Date.now() / 1_000);
+  const token = await new SignJWT({ role: "authenticated" })
+    .setProtectedHeader({ alg: "ES256", kid: "remote-neon-key" })
+    .setIssuer(authUrl)
+    .setAudience(origin)
+    .setSubject("remote-user")
+    .setIssuedAt(now)
+    .setExpirationTime(now + 900)
+    .sign(keyPair.privateKey);
+
+  const auth = await authenticateRequest({
+    headers: { authorization: `Bearer ${token}` },
+  }, { authUrl });
+
+  assert.equal(auth.user.id, "remote-user");
+  assert.equal(requestedPath, "/neondb/auth/.well-known/jwks.json");
 });
 
 test("auth reports JWKS failures as unavailable", async () => {
