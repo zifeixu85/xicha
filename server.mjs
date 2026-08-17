@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { generateBlessing } from "./server/blessing.mjs";
+import { generateBlessing, generateMoodRecommendation } from "./server/blessing.mjs";
 import { createSpeechToken, generateSpeech } from "./server/speech.mjs";
 
 const app = express();
@@ -35,6 +35,30 @@ app.post("/api/blessing", async (request, response) => {
     console.error("Blessing API failed", error);
     return response.status(error.statusCode || 502).json({
       error: error.statusCode ? error.message : "AI 签语暂时没有摇出来，请稍后再试。",
+    });
+  }
+});
+
+app.post("/api/recommendation", async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  const now = Date.now();
+  const client = request.ip || "local";
+  const recentRequests = (requestWindows.get(client) || []).filter((time) => now - time < 10 * 60_000);
+  if (recentRequests.length >= 30) {
+    return response.status(429).json({ error: "推荐有点频繁，歇一会儿再来吧。" });
+  }
+  requestWindows.set(client, [...recentRequests, now]);
+
+  try {
+    const result = await generateMoodRecommendation(request.body, process.env.DEEPSEEK_API_KEY);
+    return response.json({
+      ...result,
+      speechToken: createSpeechToken(result.blessing, process.env.MINIMAX_API_KEY),
+    });
+  } catch (error) {
+    console.error("Recommendation API failed", error);
+    return response.status(error.statusCode || 502).json({
+      error: error.statusCode ? error.message : "AI 暂时没挑出合适的一杯，请稍后再试。",
     });
   }
 });

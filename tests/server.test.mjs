@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { generateBlessing } from "../server/blessing.mjs";
+import { generateBlessing, generateMoodRecommendation } from "../server/blessing.mjs";
 import { createSpeechToken, generateSpeech } from "../server/speech.mjs";
 
 test("mood note is included in the personalized blessing prompt", async () => {
@@ -23,6 +23,34 @@ test("mood note is included in the personalized blessing prompt", async () => {
   assert.match(requestBody.messages[0].content, /先准确共情/);
   assert.match(requestBody.messages[0].content, /自伤、自杀或即时危险/);
   assert.match(requestBody.messages[1].content, /用户主动写下的近况：刚刚失业了，心情很糟。/);
+});
+
+test("mood recommendation selects only an allowed recipe and returns its blessing", async () => {
+  let requestBody;
+  const result = await generateMoodRecommendation({
+    localTime: "2026年8月17日 21:20",
+    timeZone: "Asia/Shanghai",
+    moodNote: "今天失业了，想安静缓一缓。",
+    candidates: [
+      { id: "bright-fruit", name: "晴空果茶", category: "鲜果茶", summary: "清爽明亮", tags: ["清爽"] },
+      { id: "soft-zero", name: "晚安椰乳", category: "0咖乳饮", summary: "柔和放松", tags: ["晚间友好"] },
+    ],
+  }, "deepseek-test-key", {
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "```json\n{\"recipeId\":\"soft-zero\",\"blessing\":\"今晚先不用赶路，让柔软的一杯陪你歇一歇。\"}\n```" } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+
+  assert.deepEqual(result, {
+    recipeId: "soft-zero",
+    blessing: "今晚先不用赶路，让柔软的一杯陪你歇一歇。",
+    model: "deepseek-v4-pro",
+  });
+  assert.match(requestBody.messages[0].content, /只能使用候选列表中原样存在的 recipeId/);
+  assert.match(requestBody.messages[1].content, /今天失业了，想安静缓一缓/);
 });
 
 test("speech request uses the fixed MiniMax configuration and signed blessing", async () => {

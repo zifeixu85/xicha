@@ -22,7 +22,7 @@ def silent_wav_data_url():
     return "data:audio/wav;base64," + base64.b64encode(output.getvalue()).decode("ascii")
 
 
-def install_api_mocks(context, blessing_requests, speech_requests, speech_delay):
+def install_api_mocks(context, blessing_requests, recommendation_requests, speech_requests, speech_delay):
     blessing_index = {"value": 0}
 
     def mock_blessing(route):
@@ -56,7 +56,23 @@ def install_api_mocks(context, blessing_requests, speech_requests, speech_delay)
             # The browser intentionally aborts the old request in the race test.
             pass
 
+    def mock_recommendation(route):
+        request = json.loads(route.request.post_data or "{}")
+        recommendation_requests.append(request)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            headers={"Cache-Control": "no-store"},
+            body=json.dumps({
+                "recipeId": "coconut-guava-zero",
+                "blessing": "这杯柔软刚好接住此刻，也陪你慢慢向前。",
+                "model": "deepseek-v4-pro",
+                "speechToken": f"recommend-token-{len(recommendation_requests)}",
+            }),
+        )
+
     context.route("**/api/blessing", mock_blessing)
+    context.route("**/api/recommendation", mock_recommendation)
     context.route("**/api/speech", mock_speech)
 
 
@@ -64,9 +80,10 @@ with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
     blessing_requests = []
+    recommendation_requests = []
     speech_requests = []
     speech_delay = {"seconds": 0}
-    install_api_mocks(context, blessing_requests, speech_requests, speech_delay)
+    install_api_mocks(context, blessing_requests, recommendation_requests, speech_requests, speech_delay)
     context.grant_permissions(["clipboard-read", "clipboard-write"], origin="http://127.0.0.1:4173")
     desktop = context.new_page()
     errors = []
@@ -77,18 +94,25 @@ with sync_playwright() as playwright:
 
     assert desktop.locator(".recipe-card h2").is_visible()
     assert desktop.locator(".category-card").count() == 5
+    assert desktop.get_by_role("button", name="按我的心情推荐").is_disabled()
     note = "今天失业了，心里有点难受。"
     desktop.locator("#mood-note-input").fill(note)
-    assert desktop.locator(".mood-note__field > span").inner_text() == f"{len(note)} / 120"
-    original_name = desktop.locator(".recipe-card h2").inner_text()
-    desktop.get_by_role("button", name="再摇一杯").click()
-    desktop.wait_for_timeout(650)
-    assert desktop.locator(".recipe-card h2").inner_text() != original_name
+    assert desktop.locator(".mood-note__actions > span").inner_text() == f"{len(note)} / 120"
+    desktop.get_by_role("button", name="按我的心情推荐").click()
     desktop.locator(".ai-blessing--ready").wait_for(timeout=15000)
+    assert desktop.locator(".recipe-card h2").inner_text() == "芭乐晚安云"
+    assert desktop.locator(".recipe-card__label").inner_text() == "AI 按此刻心情推荐"
     assert len(desktop.locator(".ai-blessing p").inner_text()) >= 10
-    assert blessing_requests[-1]["moodNote"] == note
-    assert blessing_requests[-1]["recipe"]["name"] == desktop.locator(".recipe-card h2").inner_text()
-    assert blessing_requests[-1]["localTime"]
+    assert recommendation_requests[-1]["moodNote"] == note
+    assert len(recommendation_requests[-1]["candidates"]) == 12
+    assert recommendation_requests[-1]["localTime"]
+    assert len(blessing_requests) == 0
+
+    desktop.locator(".mood-strip button", has_text="甜酷充电").click()
+    desktop.locator(".ai-blessing--ready").wait_for(timeout=15000)
+    assert "苦巧" in desktop.locator(".category-stamp").inner_text()
+    assert desktop.locator(".recipe-card__label").inner_text() == "你的今日特调"
+    assert blessing_requests[-1]["moodNote"] == "", "manual selection must not reuse mood text"
 
     speech_button = desktop.get_by_role("button", name="生成并播放签语")
     assert speech_button.is_visible()
@@ -139,17 +163,16 @@ with sync_playwright() as playwright:
     desktop.screenshot(path="/tmp/heytea-desktop.png", full_page=True)
 
     mobile_context = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=1)
-    install_api_mocks(mobile_context, blessing_requests, speech_requests, speech_delay)
+    install_api_mocks(mobile_context, blessing_requests, recommendation_requests, speech_requests, speech_delay)
     mobile = mobile_context.new_page()
     collect_console(mobile, errors)
     mobile.goto("http://127.0.0.1:4173")
     mobile.wait_for_load_state("networkidle")
     mobile.wait_for_timeout(1300)
     mobile.locator("#mood-note-input").fill("今天终于升职了，想庆祝一下！")
-    mobile.get_by_role("button", name="晚间 0 咖").click()
-    mobile.wait_for_timeout(650)
-    assert "0 咖乳饮" in mobile.locator(".category-stamp").inner_text()
+    mobile.get_by_role("button", name="按我的心情推荐").click()
     mobile.locator(".ai-blessing--ready").wait_for(timeout=15000)
+    assert "0 咖乳饮" in mobile.locator(".category-stamp").inner_text()
     mobile.get_by_role("button", name="生成并播放签语").click()
     mobile.get_by_role("button", name="暂停签语").wait_for(timeout=5000)
     overflow = mobile.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")

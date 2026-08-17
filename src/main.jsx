@@ -22,6 +22,7 @@ import {
   Sparkles,
   UserRound,
   Volume2,
+  WandSparkles,
   X,
 } from "lucide-react";
 import {
@@ -211,6 +212,7 @@ function App({ auth }) {
   const [saved, setSaved] = useState(readGuestFavorites);
   const [syncing, setSyncing] = useState(false);
   const [moodNote, setMoodNote] = useState("");
+  const [selectionPath, setSelectionPath] = useState("manual");
   const [aiBlessing, setAiBlessing] = useState({ status: "idle", text: "摇一杯，让 AI 为此刻写下一张签。" });
   const [speech, setSpeech] = useState({ status: "idle", url: "", message: "" });
   const toastTimer = useRef(null);
@@ -252,7 +254,7 @@ function App({ auth }) {
   useEffect(() => {
     const onKey = (event) => {
       if (event.key === "Escape") setSheet(null);
-      if (event.key.toLowerCase() === "r" && !sheet) roll();
+      if (event.key.toLowerCase() === "r" && !sheet) repeatSelection();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -377,14 +379,78 @@ function App({ auth }) {
     resetSpeech();
     setAiBlessing({ status: "loading", text: "正在摇匀这一杯和此刻…" });
     setRolling(true);
-    const noteForRequest = moodNote.trim();
     const nextPool = nextMood === "all" ? recipes : recipes.filter((item) => item.category === nextMood);
     window.setTimeout(() => {
       const nextRecipe = pickRandom(nextPool, recipe.id);
       setRecipe(nextRecipe);
       setRolling(false);
-      requestBlessing(nextRecipe, noteForRequest);
+      requestBlessing(nextRecipe, "");
     }, 440);
+  };
+
+  const recommendFromMood = async () => {
+    const noteForRequest = moodNote.trim();
+    if (!noteForRequest || rolling) return;
+
+    blessingController.current?.abort();
+    const controller = new AbortController();
+    blessingController.current = controller;
+    const generation = blessingGeneration.current + 1;
+    blessingGeneration.current = generation;
+    resetSpeech();
+    setSelectionPath("mood");
+    setMood("all");
+    setRolling(true);
+    const moment = getLocalMoment();
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    setAiBlessing({ status: "loading", text: "AI 正在读你的心情，为此刻挑一杯…", time: moment.localTime });
+
+    try {
+      const [response] = await Promise.all([
+        fetch("/api/recommendation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...moment,
+            moodNote: noteForRequest,
+            candidates: recipes.map((item) => ({
+              id: item.id,
+              name: item.name,
+              category: categoryMeta[item.category]?.name,
+              summary: item.summary,
+              tags: item.tags,
+            })),
+            recent: recentBlessings.current.slice(-80),
+            requestId,
+          }),
+          signal: controller.signal,
+        }),
+        new Promise((resolve) => window.setTimeout(resolve, 440)),
+      ]);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "AI 暂时没挑出合适的一杯");
+      const nextRecipe = recipes.find((item) => item.id === payload.recipeId);
+      if (!nextRecipe || !payload.blessing) throw new Error("AI 推荐结果不完整，请再试一次。");
+      if (generation !== blessingGeneration.current) return;
+
+      const nextRecent = [...recentBlessings.current, payload.blessing];
+      recentBlessings.current = nextRecent;
+      localStorage.setItem(RECENT_BLESSINGS_KEY, JSON.stringify(nextRecent));
+      setRecipe(nextRecipe);
+      currentBlessing.current = payload.blessing;
+      setAiBlessing({
+        status: "ready",
+        text: payload.blessing,
+        time: moment.localTime,
+        speechToken: payload.speechToken || "",
+      });
+    } catch (error) {
+      if (error.name === "AbortError" || generation !== blessingGeneration.current) return;
+      console.error("Failed to recommend a drink from mood", error);
+      setAiBlessing({ status: "error", text: error.message || "AI 暂时没挑出合适的一杯，请稍后再试。", time: moment.localTime });
+    } finally {
+      if (generation === blessingGeneration.current) setRolling(false);
+    }
   };
 
   const playCachedSpeech = async () => {
@@ -454,8 +520,18 @@ function App({ auth }) {
   };
 
   const chooseMood = (nextMood) => {
+    setSelectionPath("manual");
     setMood(nextMood);
     roll(nextMood);
+  };
+
+  const repeatSelection = () => {
+    if (selectionPath === "mood" && moodNote.trim()) {
+      recommendFromMood();
+      return;
+    }
+    setSelectionPath("manual");
+    roll();
   };
 
   const copyOrder = async () => {
@@ -540,7 +616,7 @@ function App({ auth }) {
           <div className="mood-note__copy">
             <span className="eyebrow"><MessageCircleHeart size={15} /> OPTIONAL · 只在本次摇签使用</span>
             <label id="mood-note-title" htmlFor="mood-note-input">今天发生了什么？</label>
-            <p>写下一点此刻的心情，AI 会让这杯更懂你。</p>
+            <p id="mood-note-help">写下一点此刻的心情，让 AI 直接替你挑一杯。</p>
           </div>
           <div className="mood-note__field">
             <textarea
@@ -548,19 +624,29 @@ function App({ auth }) {
               value={moodNote}
               maxLength={120}
               rows={3}
+              aria-describedby="mood-note-help"
               placeholder="比如：刚结束一段关系、有点丧，或是今天终于升职啦…"
               onChange={(event) => setMoodNote(Array.from(event.target.value).slice(0, 120).join(""))}
             />
-            <span className={moodNoteLength >= 108 ? "near-limit" : ""}>{moodNoteLength} / 120</span>
+            <div className="mood-note__actions">
+              <span className={moodNoteLength >= 108 ? "near-limit" : ""}>{moodNoteLength} / 120</span>
+              <button type="button" onClick={recommendFromMood} disabled={!moodNote.trim() || rolling}>
+                {rolling && selectionPath === "mood" ? <LoaderCircle className="spin" size={16} /> : <WandSparkles size={16} />}
+                {rolling && selectionPath === "mood" ? "正在为你选杯" : "按我的心情推荐"}
+              </button>
+            </div>
           </div>
         </section>
 
-        <nav className="mood-strip" aria-label="选择此刻心情">
+        <div className="choice-divider" aria-hidden="true"><span>OR</span><p>不想写心情？也可以自己选饮品方向</p></div>
+
+        <nav className="mood-strip" aria-label="自己选择饮品方向">
           {moods.map((item) => (
             <button
               key={item.id}
-              className={mood === item.id ? "active" : ""}
+              className={selectionPath === "manual" && mood === item.id ? "active" : ""}
               onClick={() => chooseMood(item.id)}
+              disabled={rolling}
             >
               <span>{item.doodle}</span>{item.label}
             </button>
@@ -600,7 +686,7 @@ function App({ auth }) {
                 <button onClick={shareRecipe} aria-label="分享配方"><Share2 size={18} /></button>
               </div>
             </div>
-            <p className="recipe-card__label">你的今日特调</p>
+            <p className="recipe-card__label">{selectionPath === "mood" ? "AI 按此刻心情推荐" : "你的今日特调"}</p>
             <h2>{recipe.name}</h2>
             <p className="recipe-card__summary">{recipe.summary}</p>
 
@@ -662,8 +748,8 @@ function App({ auth }) {
 
             <div className="tip"><Sparkles size={16} /><span>{recipe.tip}</span></div>
             <div className="main-actions">
-              <button className="roll-button" onClick={() => roll()}>
-                <RotateCcw size={19} />再摇一杯 <kbd>R</kbd>
+              <button className="roll-button" onClick={repeatSelection} disabled={rolling}>
+                <RotateCcw size={19} />{selectionPath === "mood" ? "按心情再配一杯" : "再摇一杯"} <kbd>R</kbd>
               </button>
               <button className="copy-button" onClick={copyOrder} aria-label="复制点单口令"><Clipboard size={19} /></button>
             </div>
@@ -682,6 +768,7 @@ function App({ auth }) {
                 style={{ "--card-color": item.color, "--card-ink": item.ink }}
                 key={id}
                 onClick={() => chooseMood(id)}
+                disabled={rolling}
               >
                 <span className="category-card__index">0{index + 1}</span>
                 <img src={item.image} alt="" />

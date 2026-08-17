@@ -27,7 +27,8 @@ npm run preview
 - Neon Auth 邮箱注册 / 登录，收藏随账号跨设备同步
 - 未登录收藏自动暂存，首次登录后合并进云端
 - 五类原创手绘饮品插画与响应式动效界面
-- 可选填写 120 字以内的此刻近况，每次随机后由 DeepSeek V4 Pro 结合饮品、当地时间与用户心情生成不重复签语
+- 可选填写 120 字以内的此刻近况，通过独立 CTA 让 DeepSeek V4 Pro 根据心情与当地时间直接推荐饮品并生成不重复签语
+- 心情推荐与下方手动选择饮品方向相互独立，手动选择不会携带便笺内容
 - 首次点击时按需调用 MiniMax 生成温柔女声签语，当前签语内缓存并支持暂停、继续与重播
 - 内置菜单资料来源与门店可售提示
 
@@ -61,7 +62,7 @@ MINIMAX_API_KEY=你的 MiniMax API Key
 
 `VITE_` 开头的两个值是浏览器可用的公开服务地址。`DATABASE_URL` 含数据库密码，只能放在本地或部署平台的服务端环境变量中，不能改名为 `VITE_DATABASE_URL`。
 
-`DEEPSEEK_API_KEY` 和 `MINIMAX_API_KEY` 都只能配置在服务端。浏览器分别请求同源的 `/api/blessing` 与 `/api/speech`，服务端再调用 `deepseek-v4-pro` 和 MiniMax `speech-2.8-hd`，因此 Key 不会进入前端构建产物。语音只在用户点击播放后生成，MiniMax 返回的临时 URL 仅缓存于当前页面、当前签语；重新摇签会终止旧请求并清空音频。部署到 Vercel 时，同样需要配置这两个服务端环境变量。
+`DEEPSEEK_API_KEY` 和 `MINIMAX_API_KEY` 都只能配置在服务端。浏览器分别请求同源的 `/api/recommendation`、`/api/blessing` 与 `/api/speech`，服务端再调用 `deepseek-v4-pro` 和 MiniMax `speech-2.8-hd`，因此 Key 不会进入前端构建产物。语音只在用户点击播放后生成，MiniMax 返回的临时 URL 仅缓存于当前页面、当前签语；重新摇签会终止旧请求并清空音频。部署到 Vercel 时，同样需要配置这两个服务端环境变量。
 
 祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本。心情输入第一版只随本次请求发送，不写入账号数据库或本地存储。
 
