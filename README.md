@@ -54,16 +54,42 @@ cp .env.example .env
 ```env
 VITE_NEON_AUTH_URL=你的 Auth URL
 VITE_NEON_DATA_API_URL=你的 Data API URL
+NEON_AUTH_URL=同一个 Auth URL（服务端）
 DATABASE_URL=你的 pooled connection string
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
 MINIMAX_API_KEY=你的 MiniMax API Key
 ```
 
-`VITE_` 开头的两个值是浏览器可用的公开服务地址。`DATABASE_URL` 含数据库密码，只能放在本地或部署平台的服务端环境变量中，不能改名为 `VITE_DATABASE_URL`。
+`VITE_` 开头的两个值是浏览器可用的公开服务地址。`NEON_AUTH_URL` 是同一个 Neon Auth 公开地址的服务端副本，用于定位 JWKS；本地未设置时会回退到 `VITE_NEON_AUTH_URL`，生产环境建议显式设置。`DATABASE_URL` 含数据库密码，只能放在本地或部署平台的服务端环境变量中，不能改名为 `VITE_DATABASE_URL`。
 
-`DEEPSEEK_API_KEY` 和 `MINIMAX_API_KEY` 都只能配置在服务端。浏览器分别请求同源的 `/api/blessing` 与 `/api/speech`，服务端再调用 `deepseek-v4-pro` 和 MiniMax `speech-2.8-hd`，因此 Key 不会进入前端构建产物。语音只在用户点击播放后生成，MiniMax 返回的临时 URL 仅缓存于当前页面、当前签语；重新摇签会终止旧请求并清空音频。部署到 Vercel 时，同样需要配置这两个服务端环境变量。
+`DEEPSEEK_API_KEY` 和 `MINIMAX_API_KEY` 都只能配置在服务端。浏览器分别请求同源的 `/api/blessing` 与 `/api/speech`，服务端再调用 `deepseek-v4-pro` 和 MiniMax `speech-2.8-hd`，因此 Key 不会进入前端构建产物。语音只在用户点击播放后生成，MiniMax 返回的临时 URL 仅缓存于当前页面、当前签语；重新摇签会终止旧请求并清空音频。部署到 Vercel 时，同样需要配置这两个服务端环境变量，以及 `NEON_AUTH_URL`。
 
-祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本。心情输入第一版只随本次请求发送，不写入账号数据库或本地存储。
+祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本；这个 HMAC 凭证与登录校验是两道独立检查。心情输入第一版只随本次请求发送，不写入账号数据库或本地存储。
+
+### 多模态 API 鉴权契约
+
+音频、图片、视频生成必须使用同一套服务端鉴权，不能把隐藏或禁用前端按钮当成安全边界。当前浏览器协议是：
+
+1. 请求前调用 `neonClient.auth.getSession()`，从 `data.session.token` 读取当前短期 JWT；token 只保留在 Neon Auth 的内存会话中，不写入 `localStorage`。
+2. 向同源 API 添加 `Authorization: Bearer <token>`；前端 helper 会拒绝跨域目标，避免误把 token 发给第三方。
+3. 服务端 `server/auth.mjs` 从 `NEON_AUTH_URL`（或回退的 `VITE_NEON_AUTH_URL`）加载 `/jwks`，验证签名、`iss`、`aud`、`exp`，要求 `role=authenticated` 并拒绝 Neon 匿名 token，只把验签后的 `sub` 作为用户 ID。请求体里的 `userId`、`email` 一律不可信。
+4. 缺失、过期、伪造 token 统一返回 `401 AUTH_REQUIRED`；Auth URL 配置错误、JWKS 网络或服务异常统一返回 `503 AUTH_UNAVAILABLE`。
+
+JWT 是 Neon Auth 签发的短期服务凭证（当前 Better Auth 默认约 15 分钟），服务端每次都校验其有效期。主动退出后，已经签发的 JWT 最迟会在自身 `exp` 到期时失效；本项目不持久化 token，以缩小暴露窗口。
+
+实现依据是当前 `@neondatabase/neon-js` 的 `set-auth-jwt` 会话行为，以及 Better Auth 的 [JWT/JWKS 验证契约](https://better-auth.com/docs/plugins/jwt)。
+
+当前 `/api/speech` 已同时接入这套登录校验与原有短时 HMAC speech ticket。后续新增图片或视频 handler 时，在读取业务身份或调用供应商之前复用同一个 guard：
+
+```js
+import { requireAuthenticatedUser } from "./server/auth.mjs";
+
+const auth = await requireAuthenticatedUser(request, response);
+if (!auth) return;
+// 这里只使用 auth.user.id；随后才校验输入、限流并调用生成服务。
+```
+
+这段接口同时兼容 Express 的 `request/response` 和 Vercel Node handlers；测试时也可以向 `authenticateRequest` 注入本地 JWKS key set，不需要绕过生产验证逻辑。
 
 ### 3. 创建收藏表与 RLS
 

@@ -1,4 +1,5 @@
 import { generateSpeech } from "../server/speech.mjs";
+import { requireAuthenticatedUser } from "../server/auth.mjs";
 
 export const config = { maxDuration: 30 };
 
@@ -8,6 +9,9 @@ export default async function handler(request, response) {
     response.setHeader("Allow", "POST");
     return response.status(405).json({ error: "只支持 POST 请求" });
   }
+
+  const auth = await requireAuthenticatedUser(request, response);
+  if (!auth) return;
 
   try {
     const result = await generateSpeech(request.body, process.env.MINIMAX_API_KEY);

@@ -32,6 +32,7 @@ import {
   neonClient,
   neonConfigured,
 } from "./neon";
+import { authFetch, AuthRequiredError } from "./auth-fetch";
 import { categoryMeta, recipes, sources } from "./recipes";
 import "./styles.css";
 
@@ -414,6 +415,11 @@ function App({ auth }) {
       return;
     }
     if (aiBlessing.status !== "ready") return;
+    if (!user) {
+      setSheet("auth");
+      notify("登录后就能听这张签");
+      return;
+    }
     if (!aiBlessing.speechToken) {
       setSpeech({ status: "error", url: "", message: "语音服务尚未配置，请稍后再试。" });
       return;
@@ -427,14 +433,22 @@ function App({ auth }) {
     setSpeech({ status: "loading", url: "", message: "温柔女声正在读这张签…" });
 
     try {
-      const response = await fetch("/api/speech", {
+      const response = await authFetch("/api/speech", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: blessingText, token: aiBlessing.speechToken }),
         signal: controller.signal,
+      }, {
+        session: auth.session,
+        getSession: () => neonClient.auth.getSession(),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || "签语语音暂时生成不了");
+      if (!response.ok) {
+        const requestError = new Error(payload.error || "签语语音暂时生成不了");
+        requestError.code = payload.code;
+        requestError.statusCode = response.status;
+        throw requestError;
+      }
       if (!payload.audio) throw new Error("没有收到可以播放的语音");
       if (generation !== speechGeneration.current || currentBlessing.current !== blessingText) return;
 
@@ -446,6 +460,9 @@ function App({ auth }) {
       }
     } catch (error) {
       if (error.name === "AbortError" || generation !== speechGeneration.current) return;
+      if (error instanceof AuthRequiredError || error.code === "AUTH_REQUIRED" || error.statusCode === 401) {
+        setSheet("auth");
+      }
       console.error("Failed to generate blessing speech", error);
       setSpeech({ status: "error", url: "", message: error.message || "签语语音暂时生成不了，请稍后再试。" });
     } finally {

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { generateBlessing } from "./server/blessing.mjs";
 import { createSpeechToken, generateSpeech } from "./server/speech.mjs";
+import { requireAuthenticatedUser } from "./server/auth.mjs";
 
 const app = express();
 const port = Number(process.env.PORT) || 5173;
@@ -41,6 +42,9 @@ app.post("/api/blessing", async (request, response) => {
 
 app.post("/api/speech", async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
+  const auth = await requireAuthenticatedUser(request, response);
+  if (!auth) return;
+
   const now = Date.now();
   const client = request.ip || "local";
   const recentRequests = (speechWindows.get(client) || []).filter((time) => now - time < 10 * 60_000);
