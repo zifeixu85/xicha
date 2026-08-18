@@ -1,6 +1,7 @@
 import { generateSpeech } from "../server/speech.mjs";
 import { requireAuthenticatedUser } from "../server/auth.mjs";
 import { persistCreationMedia } from "../server/creation-store.mjs";
+import { isPublicDemoMode, sendPublicDemoMediaDisabled } from "../server/public-demo.mjs";
 
 export const config = { maxDuration: 120 };
 
@@ -10,6 +11,7 @@ export default async function handler(request, response) {
     response.setHeader("Allow", "POST");
     return response.status(405).json({ error: "只支持 POST 请求" });
   }
+  if (isPublicDemoMode()) return sendPublicDemoMediaDisabled(response);
 
   const auth = await requireAuthenticatedUser(request, response);
   if (!auth) return;
