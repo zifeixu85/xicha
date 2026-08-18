@@ -1,7 +1,8 @@
 import { generateSpeech } from "../server/speech.mjs";
 import { requireAuthenticatedUser } from "../server/auth.mjs";
+import { persistCreationMedia } from "../server/creation-store.mjs";
 
-export const config = { maxDuration: 30 };
+export const config = { maxDuration: 120 };
 
 export default async function handler(request, response) {
   response.setHeader("Cache-Control", "no-store, max-age=0");
@@ -15,6 +16,17 @@ export default async function handler(request, response) {
 
   try {
     const result = await generateSpeech(request.body, process.env.MINIMAX_API_KEY);
+    if (request.body?.creationId) {
+      const stored = await persistCreationMedia({
+        ownerId: auth.user.id,
+        creationId: request.body.creationId,
+        kind: "audio",
+        sourceUrl: result.audio,
+        sourceProvider: "minimax",
+      });
+      result.audio = stored.url;
+      result.expiresAt = stored.expiresAt;
+    }
     return response.status(200).json(result);
   } catch (error) {
     console.error("Speech API failed", error);

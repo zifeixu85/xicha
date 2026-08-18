@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { generateDrinkImage, queryDrinkImage } from "./drink-image.mjs";
 import { requireAuthenticatedUser } from "./auth.mjs";
+import { ensureCreationOwner, persistCreationMedia } from "./creation-store.mjs";
 
 const POLL_TOKEN_TTL_MS = 24 * 60 * 60_000;
 
@@ -46,7 +47,7 @@ const normalizedUserId = (identity) => {
 
 const subjectDigest = (userId) => createHash("sha256").update(userId).digest("base64url");
 
-const signPollToken = ({ taskId, userId, expiresAt }, secret) => {
+const signPollToken = ({ taskId, userId, creationId, expiresAt }, secret) => {
   if (!secret) throw new MediaApiError("服务端尚未配置媒体任务签名密钥。", {
     statusCode: 503,
     code: "SERVICE_NOT_CONFIGURED",
@@ -54,6 +55,7 @@ const signPollToken = ({ taskId, userId, expiresAt }, secret) => {
   const payload = Buffer.from(JSON.stringify({
     taskId,
     subject: subjectDigest(userId),
+    creationId: creationId || null,
     expiresAt,
   })).toString("base64url");
   const signature = createHmac("sha256", secret).update(payload).digest("base64url");
@@ -61,21 +63,22 @@ const signPollToken = ({ taskId, userId, expiresAt }, secret) => {
 };
 
 const verifyPollToken = ({ token, taskId, userId, now }, secret) => {
-  if (!secret || typeof token !== "string" || token.length > 1_024) return false;
+  if (!secret || typeof token !== "string" || token.length > 1_024) return null;
   const [payloadPart, signaturePart, extra] = token.split(".");
-  if (!payloadPart || !signaturePart || extra) return false;
+  if (!payloadPart || !signaturePart || extra) return null;
   try {
     const expected = createHmac("sha256", secret).update(payloadPart).digest();
     const provided = Buffer.from(signaturePart, "base64url");
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return false;
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return null;
     const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8"));
-    return payload.taskId === taskId
+    const valid = payload.taskId === taskId
       && payload.subject === subjectDigest(userId)
       && Number.isFinite(payload.expiresAt)
       && payload.expiresAt >= now
       && payload.expiresAt <= now + POLL_TOKEN_TTL_MS + 5_000;
+    return valid ? payload : null;
   } catch {
-    return false;
+    return null;
   }
 };
 
@@ -158,10 +161,13 @@ export const createGenerateDrinkImageHandler = ({
     const userId = await authenticate(request, response, authenticateRequest);
     if (!userId) return undefined;
     await rateLimiter.consume({ action: "generate", userId, ip: requestIp(request) });
-    const task = await generateDrinkImage(request.body, apiKey, { fetchImpl });
+    const { creationId, ...drinkInput } = request.body || {};
+    if (creationId) await ensureCreationOwner(creationId, userId);
+    const task = await generateDrinkImage(drinkInput, apiKey, { fetchImpl });
     const pollToken = signPollToken({
       taskId: task.taskId,
       userId,
+      creationId,
       expiresAt: now() + POLL_TOKEN_TTL_MS,
     }, signingSecret);
     return response.status(202).json({ ...task, pollToken, pollAfterMs: 2_500 });
@@ -190,13 +196,25 @@ export const createMediaTaskHandler = ({
     await rateLimiter.consume({ action: "query", userId, ip: requestIp(request) });
     const taskId = Array.isArray(request.query?.taskId) ? "" : request.query?.taskId;
     const pollToken = Array.isArray(request.query?.pollToken) ? "" : request.query?.pollToken;
-    if (!verifyPollToken({ token: pollToken, taskId, userId, now: now() }, signingSecret)) {
+    const taskAccess = verifyPollToken({ token: pollToken, taskId, userId, now: now() }, signingSecret);
+    if (!taskAccess) {
       throw new MediaApiError("任务查询凭证无效或已过期。", {
         statusCode: 403,
         code: "invalid_task_token",
       });
     }
     const task = await queryDrinkImage(taskId, apiKey, { fetchImpl });
+    if (task.status === "completed" && taskAccess.creationId && task.results?.[0]) {
+      const stored = await persistCreationMedia({
+        ownerId: userId,
+        creationId: taskAccess.creationId,
+        kind: "image",
+        sourceUrl: task.results[0],
+        sourceProvider: "evolink",
+      });
+      task.results = [stored.url];
+      task.expiresAt = stored.expiresAt;
+    }
     return response.status(200).json(task);
   } catch (error) {
     return sendError(response, error, "图片任务状态暂时查不到，请稍后再试。");

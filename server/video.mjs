@@ -11,6 +11,22 @@ const MAX_URL_LENGTH = 2_048;
 const REQUEST_TIMEOUT_MS = 20_000;
 const TRUSTED_MEDIA_HOSTS = new Set(["files.evolink.ai"]);
 
+const configuredR2MediaHosts = () => {
+  const hosts = new Set();
+  const bucket = String(process.env.STORAGE_BUCKET || "").trim().toLowerCase();
+  try {
+    const endpoint = new URL(process.env.STORAGE_ENDPOINT || "");
+    const endpointHost = endpoint.hostname.toLowerCase().replace(/\.$/, "");
+    if (endpoint.protocol === "https:" && endpointHost.endsWith(".r2.cloudflarestorage.com")) {
+      hosts.add(endpointHost);
+      if (/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) hosts.add(`${bucket}.${endpointHost}`);
+    }
+  } catch {
+    // Missing or malformed storage configuration is handled by the storage layer.
+  }
+  return hosts;
+};
+
 export class VideoServiceError extends Error {
   constructor(message, statusCode = 502, code = "video_service_error") {
     super(message);
@@ -113,10 +129,11 @@ const parsePublicHttpsUrl = (value, label) => {
 
 export const validatePublicImageUrl = async (value, {
   lookupImpl = (hostname) => dnsLookup(hostname, { all: true, verbatim: true }),
+  trustedMediaHosts = configuredR2MediaHosts(),
 } = {}) => {
   const parsed = parsePublicHttpsUrl(value, "图片地址");
   const hostname = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
-  if (TRUSTED_MEDIA_HOSTS.has(hostname)) return parsed.toString();
+  if (TRUSTED_MEDIA_HOSTS.has(hostname) || trustedMediaHosts.has(hostname)) return parsed.toString();
   if (!isIP(hostname)) {
     let addresses;
     try {

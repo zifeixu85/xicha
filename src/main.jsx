@@ -9,7 +9,9 @@ import {
   Clipboard,
   Cloud,
   CloudOff,
+  Film,
   Heart,
+  Image as ImageIcon,
   Info,
   LoaderCircle,
   LockKeyhole,
@@ -28,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import CustomDrinkStudio from "./CustomDrinkStudio";
+import { fetchCreations } from "./custom-drink-api";
 import {
   addFavorite,
   deleteFavorite,
@@ -202,6 +205,59 @@ function Splash({ hiding }) {
       <div className="splash__stamp">喜</div>
       <p>正在摇匀今日灵感</p>
       <div className="splash__dots"><i /><i /><i /></div>
+    </div>
+  );
+}
+
+function CreationsPanel({ user, getSession, onLogin }) {
+  const [state, setState] = useState({ status: "loading", items: [], message: "" });
+
+  useEffect(() => {
+    if (!user) {
+      setState({ status: "locked", items: [], message: "" });
+      return undefined;
+    }
+    const controller = new AbortController();
+    setState({ status: "loading", items: [], message: "" });
+    fetchCreations(getSession, controller.signal)
+      .then((payload) => setState({ status: "ready", items: payload.creations || [], message: "" }))
+      .catch((error) => {
+        if (error.name !== "AbortError") setState({ status: "error", items: [], message: error.message || "作品集暂时打不开" });
+      });
+    return () => controller.abort();
+  }, [user?.id]);
+
+  if (!user) return (
+    <div className="empty-state creations-locked">
+      <LockKeyhole size={30} /><b>登录后查看 AI 作品</b>
+      <p>自创饮品的图片、祝福语音和宣传片会按账号保存。</p>
+      <button type="button" onClick={onLogin}>去登录</button>
+    </div>
+  );
+  if (state.status === "loading") return <div className="creation-library-state"><LoaderCircle className="spin" size={24} />正在整理你的作品…</div>;
+  if (state.status === "error") return <div className="creation-library-state creation-library-state--error"><CloudOff size={24} />{state.message}</div>;
+  if (!state.items.length) return <div className="empty-state"><Beaker size={30} /><b>还没有自创作品</b><p>去配方桌创作一杯，完成的媒体会自动出现在这里。</p></div>;
+
+  return (
+    <div className="creation-library">
+      {state.items.map((item) => (
+        <article className="creation-library__card" key={item.id}>
+          <div className="creation-library__visual">
+            {item.media.image?.url ? <img src={item.media.image.url} alt={`${item.name} 饮品图`} /> : <span><ImageIcon size={24} />图片生成后显示</span>}
+          </div>
+          <div className="creation-library__copy">
+            <time>{new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(item.createdAt))}</time>
+            <h3>{item.name}</h3>
+            <p>{item.summary}</p>
+            <blockquote>{item.blessing}</blockquote>
+            <div className="creation-library__recipe">{(item.recipe?.receipt || []).map((ingredient) => <span key={ingredient}>{ingredient}</span>)}</div>
+            <div className="creation-library__media">
+              {item.media.audio?.url ? <audio controls preload="none" src={item.media.audio.url}>你的浏览器不支持音频播放。</audio> : <small><Volume2 size={14} />祝福语音尚未生成</small>}
+              {item.media.video?.url ? <video controls preload="metadata" poster={item.media.image?.url || undefined} src={item.media.video.url}>你的浏览器不支持视频播放。</video> : <small><Film size={14} />宣传片尚未生成</small>}
+            </div>
+          </div>
+        </article>
+      ))}
     </div>
   );
 }
@@ -637,6 +693,10 @@ function App({ auth }) {
             <span>小本本</span>
             {saved.length > 0 && <em>{saved.length}</em>}
           </button>
+          <button className="text-button" onClick={() => setSheet(user ? "creations" : "auth")}>
+            <Beaker size={17} />
+            <span>AI 作品</span>
+          </button>
           <button className="round-button" onClick={() => setSheet("sources")} aria-label="资料说明">
             <Info size={19} />
           </button>
@@ -850,7 +910,7 @@ function App({ auth }) {
 
       {sheet && (
         <div className="sheet-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setSheet(null)}>
-          <aside className="sheet" role="dialog" aria-modal="true" aria-label={sheet === "sources" ? "资料来源" : sheet === "saved" ? "收藏配方" : "账号登录与同步"}>
+          <aside className={`sheet ${sheet === "creations" ? "sheet--wide" : ""}`} role="dialog" aria-modal="true" aria-label={sheet === "sources" ? "资料来源" : sheet === "saved" ? "收藏配方" : sheet === "creations" ? "我的 AI 作品" : "账号登录与同步"}>
             <div className="sheet__handle" />
             <button className="sheet__close" onClick={() => setSheet(null)}><X size={20} /></button>
             {sheet === "sources" ? (
@@ -866,6 +926,13 @@ function App({ auth }) {
                   ))}
                 </div>
                 <div className="notice"><Info size={18} /><span>配方只使用公开出现的原料名；“灵感实验款”的同类原料不保证在所有门店被系统同时放行。</span></div>
+              </>
+            ) : sheet === "creations" ? (
+              <>
+                <span className="eyebrow"><Beaker size={15} /> AI CREATION LIBRARY</span>
+                <h2>我的 AI 饮品作品</h2>
+                <p className="sheet__lead">图片、祝福语音与 5 秒宣传片保存在你的 R2 账号目录，换设备登录也能继续播放。</p>
+                <CreationsPanel user={user} getSession={getLatestSession} onLogin={() => setSheet("auth")} />
               </>
             ) : sheet === "saved" ? (
               <>

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { neon } from "@neondatabase/serverless";
 
@@ -10,17 +10,23 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
-const migrationUrl = new URL("../migrations/001_user_favorites.sql", import.meta.url);
-const migration = await readFile(fileURLToPath(migrationUrl), "utf8");
-const statements = migration
-  .split("--> statement-breakpoint")
-  .map((statement) => statement.trim())
-  .filter(Boolean);
-
 const sql = neon(databaseUrl);
+const migrationsUrl = new URL("../migrations/", import.meta.url);
+const migrationNames = (await readdir(fileURLToPath(migrationsUrl)))
+  .filter((name) => /^\d+.*\.sql$/.test(name))
+  .sort();
+let applied = 0;
 
-for (const statement of statements) {
-  await sql.query(statement);
+for (const name of migrationNames) {
+  const migration = await readFile(fileURLToPath(new URL(name, migrationsUrl)), "utf8");
+  const statements = migration
+    .split("--> statement-breakpoint")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+  for (const statement of statements) {
+    await sql.query(statement);
+    applied += 1;
+  }
 }
 
-console.log(`Neon migration complete: ${statements.length} statements applied.`);
+console.log(`Neon migration complete: ${migrationNames.length} files, ${applied} statements applied.`);

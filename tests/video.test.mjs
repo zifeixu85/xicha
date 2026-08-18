@@ -195,6 +195,26 @@ test("trusted Evolink media survives local proxy fake-IP DNS without weakening S
   );
 });
 
+test("the exact configured R2 bucket host survives fake-IP DNS without trusting lookalike hosts", async () => {
+  const fakeIpDns = async () => [{ address: "198.18.12.34", family: 4 }];
+  const trustedMediaHosts = new Set([
+    "videofly.account-id.r2.cloudflarestorage.com",
+    "account-id.r2.cloudflarestorage.com",
+  ]);
+  const signedUrl = "https://videofly.account-id.r2.cloudflarestorage.com/users/hash/creation/image.png?X-Amz-Signature=test";
+  assert.equal(
+    await validatePublicImageUrl(signedUrl, { lookupImpl: fakeIpDns, trustedMediaHosts }),
+    signedUrl,
+  );
+  await assert.rejects(
+    validatePublicImageUrl("https://videofly.account-id.r2.cloudflarestorage.com.attacker.test/image.png", {
+      lookupImpl: fakeIpDns,
+      trustedMediaHosts,
+    }),
+    (error) => error.statusCode === 400,
+  );
+});
+
 const mockResponse = () => ({
   statusCode: 200,
   headers: {},

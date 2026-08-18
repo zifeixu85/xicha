@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { requireAuthenticatedUser } from "./auth.mjs";
+import { ensureCreationOwner, persistCreationMedia } from "./creation-store.mjs";
 import {
   VideoServiceError,
   createVideoFrameTask,
@@ -27,12 +28,13 @@ const principalIdOf = (principal) => {
 
 const subjectDigest = (principalId) => createHash("sha256").update(principalId).digest("base64url");
 
-const taskToken = ({ taskId, taskType, principalId, expiresAt }, secret) => {
+const taskToken = ({ taskId, taskType, principalId, creationId, expiresAt }, secret) => {
   if (!secret) throw new VideoServiceError("服务端尚未配置视频任务签名密钥", 503, "service_not_configured");
   const payload = Buffer.from(JSON.stringify({
     taskId,
     taskType,
     subject: subjectDigest(principalId),
+    creationId: creationId || null,
     expiresAt,
   })).toString("base64url");
   const signature = createHmac("sha256", secret).update(payload).digest("base64url");
@@ -41,9 +43,9 @@ const taskToken = ({ taskId, taskType, principalId, expiresAt }, secret) => {
 
 const verifyTaskToken = ({ token, taskId, taskType, principalId, now }, secret) => {
   if (!secret) throw new VideoServiceError("服务端尚未配置视频任务签名密钥", 503, "service_not_configured");
-  if (typeof token !== "string" || token.length > 1_024) return false;
+  if (typeof token !== "string" || token.length > 1_024) return null;
   const [payloadPart, signaturePart, extra] = String(token || "").split(".");
-  if (!payloadPart || !signaturePart || extra) return false;
+  if (!payloadPart || !signaturePart || extra) return null;
 
   const expected = createHmac("sha256", secret).update(payloadPart).digest();
   let provided;
@@ -52,15 +54,16 @@ const verifyTaskToken = ({ token, taskId, taskType, principalId, now }, secret) 
     provided = Buffer.from(signaturePart, "base64url");
     payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8"));
   } catch {
-    return false;
+    return null;
   }
-  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return false;
-  return payload.taskId === taskId
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return null;
+  const valid = payload.taskId === taskId
     && payload.taskType === taskType
     && payload.subject === subjectDigest(principalId)
     && Number.isFinite(payload.expiresAt)
     && payload.expiresAt >= now
     && payload.expiresAt <= now + POLL_TOKEN_TTL_MS + 5_000;
+  return valid ? payload : null;
 };
 
 const sendError = (response, error) => {
@@ -90,13 +93,16 @@ export const createVideoHandlers = ({
     try {
       const principalId = await authenticate(request, response);
       if (!principalId) return undefined;
+      const { creationId, ...operationInput } = request.body || {};
+      if (creationId) await ensureCreationOwner(creationId, principalId);
       const result = operation === "frame"
-        ? await createVideoFrameTask(request.body, apiKey, clientOptions)
-        : await createVideoTask(request.body, apiKey, clientOptions);
+        ? await createVideoFrameTask(operationInput, apiKey, clientOptions)
+        : await createVideoTask(operationInput, apiKey, clientOptions);
       const pollToken = taskToken({
         taskId: result.taskId,
         taskType: result.taskType,
         principalId,
+        creationId,
         expiresAt: now() + POLL_TOKEN_TTL_MS,
       }, signingSecret);
       return response.status(202).json({ ...result, pollToken, pollAfterMs: 2_500 });
@@ -114,10 +120,22 @@ export const createVideoHandlers = ({
       const taskId = request.query?.taskId;
       const taskType = request.query?.taskType;
       const pollToken = request.query?.pollToken;
-      if (!verifyTaskToken({ token: pollToken, taskId, taskType, principalId, now: now() }, signingSecret)) {
+      const taskAccess = verifyTaskToken({ token: pollToken, taskId, taskType, principalId, now: now() }, signingSecret);
+      if (!taskAccess) {
         throw new VideoServiceError("任务查询凭证无效或已过期", 403, "invalid_task_token");
       }
       const result = await queryTask(taskId, taskType, apiKey, clientOptions);
+      if (result.status === "completed" && result.taskType === "video" && result.resultUrl && taskAccess.creationId) {
+        const stored = await persistCreationMedia({
+          ownerId: principalId,
+          creationId: taskAccess.creationId,
+          kind: "video",
+          sourceUrl: result.resultUrl,
+          sourceProvider: "evolink",
+        });
+        result.resultUrl = stored.url;
+        result.expiresAt = stored.expiresAt;
+      }
       const pollAfterMs = result.status === "processing"
         ? 2_500
         : result.status === "pending"

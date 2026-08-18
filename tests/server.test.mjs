@@ -3,6 +3,7 @@ import test from "node:test";
 import { generateBlessing, generateMoodRecommendation } from "../server/blessing.mjs";
 import { createSpeechToken, generateSpeech } from "../server/speech.mjs";
 import { generateCustomDrink, normalizeCustomDrinkInput } from "../server/custom-drink.mjs";
+import { suggestCustomIngredients } from "../server/custom-drink-suggestion.mjs";
 
 test("mood note is included in the personalized blessing prompt", async () => {
   let requestBody;
@@ -174,4 +175,43 @@ test("custom drink falls back safely on malformed model JSON and rejects invalid
     fruit: [{ name: "青提" }],
     flavor: [{ name: "石磨抹茶" }],
   } } }), /不能搭配/);
+});
+
+test("mood-first custom mode selects only whitelisted compatible ingredient ids", async () => {
+  let request;
+  const result = await suggestCustomIngredients({ moodNote: "今天升职了，想喝一杯明亮但不要太甜的。" }, "test-key", {
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        groups: {
+          base: ["green-tea"], milk: [], fruit: ["grape", "mango"],
+          flavor: ["jasmine"], texture: ["crispy-boba"], cloud: ["guava-cloud"],
+        },
+        sweetness: "少少甜",
+        temperature: "正常冰",
+        reason: "清透茶香托住明亮果味，脆弹口感把庆祝的轻快感延长。",
+      }) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+
+  assert.deepEqual(result.groups.base, ["green-tea"]);
+  assert.deepEqual(result.ingredients.fruit, ["青提鲜果", "芒果果肉"]);
+  assert.equal(result.sweetness, "少少甜");
+  assert.match(request.messages[0].content, /只能返回目录中原样存在的 id/);
+  assert.match(request.messages[1].content, /今天升职了/);
+});
+
+test("mood-first custom mode rejects empty mood and safely falls back on invalid model choices", async () => {
+  await assert.rejects(
+    suggestCustomIngredients({ moodNote: "" }, "test-key", { fetchImpl: async () => assert.fail("provider should not be called") }),
+    (error) => error.statusCode === 400,
+  );
+  const result = await suggestCustomIngredients({ moodNote: "今天很累，晚上想安静一点。" }, "test-key", {
+    fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      groups: { base: ["invented-ingredient"] }, sweetness: "十倍糖", temperature: "滚烫", reason: "不合规",
+    }) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+  });
+  assert.deepEqual(result.groups.base, ["zero-coconut-water"]);
+  assert.equal(result.temperature, "去冰");
+  assert.match(result.model, /fallback$/);
 });

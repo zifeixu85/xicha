@@ -21,13 +21,18 @@ export const createCustomDrink = (body, getSession, signal) => requestJson("/api
   method: "POST", body, signal,
 }, getSession);
 
-export const createDrinkImageTask = ({ drink, moodNote }, getSession, signal) => requestJson("/api/generate-drink-image", {
+export const suggestCustomIngredients = (moodNote, getSession, signal) => requestJson("/api/suggest-custom-ingredients", {
+  method: "POST", body: { moodNote }, signal,
+}, getSession);
+
+export const createDrinkImageTask = ({ drink, moodNote, creationId }, getSession, signal) => requestJson("/api/generate-drink-image", {
   method: "POST",
   body: {
     name: drink.name,
     ingredients: drink.receipt || drink.ingredients || [],
     moodNote: moodNote || "",
     colorFlavor: [drink.summary, ...(drink.tags || [])].filter(Boolean).join("；"),
+    creationId,
   },
   signal,
 }, getSession);
@@ -53,6 +58,8 @@ export const getVideoTask = ({ taskId, taskType, pollToken }, getSession, signal
 export const createCustomSpeech = (body, getSession, signal) => requestJson("/api/speech", {
   method: "POST", body, signal,
 }, getSession);
+
+export const fetchCreations = (getSession, signal) => requestJson("/api/creations", { signal }, getSession);
 
 const abortableDelay = (milliseconds, signal) => new Promise((resolve, reject) => {
   const finish = () => {

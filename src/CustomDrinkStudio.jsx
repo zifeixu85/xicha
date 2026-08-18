@@ -16,6 +16,7 @@ import {
   Sparkles,
   TicketCheck,
   Volume2,
+  WandSparkles,
 } from "lucide-react";
 import {
   createCustomDrink,
@@ -25,6 +26,7 @@ import {
   createVideoFrameTask,
   waitForMediaTask,
   waitForVideoTask,
+  suggestCustomIngredients,
 } from "./custom-drink-api";
 import {
   customDrinkGroups,
@@ -89,6 +91,8 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
   const [sweetness, setSweetness] = useState("微微甜");
   const [temperature, setTemperature] = useState("少冰");
   const [note, setNote] = useState("");
+  const [recipeMode, setRecipeMode] = useState("manual");
+  const [suggestion, setSuggestion] = useState({ status: "idle", reason: "", message: "" });
   const [notice, setNotice] = useState("");
   const [creation, setCreation] = useState({ status: "idle", data: null, message: "" });
   const [image, setImage] = useState(initialMedia);
@@ -183,22 +187,51 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
     setSweetness("微微甜");
     setTemperature("少冰");
     setNote("");
+    setSuggestion({ status: "idle", reason: "", message: "" });
     flash("配方桌已经清空");
   };
 
   const shuffleDesk = () => {
     stopAll(true);
+    setRecipeMode("manual");
+    setSuggestion({ status: "idle", reason: "", message: "" });
     setSelection(randomSelection());
     setSweetness(sweetnessOptions[Math.floor(Math.random() * sweetnessOptions.length)]);
     setTemperature(temperatureOptions.slice(2)[Math.floor(Math.random() * 4)]);
     flash("灵感替你抓好一把配料");
   };
 
-  const generateImage = async (drink, moodNote, run) => {
+  const suggestFromMood = async () => {
+    if (!user) return onLogin();
+    const mood = note.trim();
+    if (Array.from(mood).length < 2) return flash("先写下一点此刻的心情");
+    stopAll(true);
+    const run = runRef.current;
+    const controller = withController();
+    setSuggestion({ status: "loading", reason: "", message: "AI 正在从风味抽屉里挑选回应此刻的配料…" });
+    try {
+      const result = await suggestCustomIngredients(mood, getSession, controller.signal);
+      if (run !== runRef.current) return;
+      setSelection(result.groups);
+      setSweetness(result.sweetness);
+      setTemperature(result.temperature);
+      setSuggestion({ status: "ready", reason: result.reason, message: "" });
+      flash("AI 已经配好一套，你还可以继续微调");
+    } catch (error) {
+      if (error.name !== "AbortError" && run === runRef.current) {
+        reopenLoginIfNeeded(error);
+        setSuggestion({ status: "error", reason: "", message: error.message || "这一杯暂时没有配好" });
+      }
+    } finally {
+      controllersRef.current.delete(controller);
+    }
+  };
+
+  const generateImage = async (drink, moodNote, creationId, run) => {
     const controller = withController();
     setImage({ status: "loading", progress: 7, url: "", message: "正在画杯身与风味层次" });
     try {
-      const started = await createDrinkImageTask({ drink, moodNote }, getSession, controller.signal);
+      const started = await createDrinkImageTask({ drink, moodNote, creationId }, getSession, controller.signal);
       if (!started.taskId) throw new Error("图片任务没有返回编号");
       const finished = await waitForMediaTask(started, getSession, controller.signal, (progress) => {
         if (run === runRef.current) setImage((value) => ({ ...value, progress, message: progress > 64 ? "正在收拾高光与杯壁水汽" : "正在画杯身与风味层次" }));
@@ -233,7 +266,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
       const creationData = { ...data, moodNote: creationNote };
       setCreation({ status: "ready", data: creationData, message: "" });
       setSpeech({ status: "idle", url: "", message: "" });
-      await generateImage(data.drink, creationNote, run);
+      await generateImage(data.drink, creationNote, data.creationId, run);
     } catch (error) {
       if (error.name !== "AbortError" && run === runRef.current) {
         reopenLoginIfNeeded(error);
@@ -247,7 +280,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
   const retryImage = async () => {
     if (!user || !creation.data?.drink) return onLogin();
     const run = runRef.current;
-    await generateImage(creation.data.drink, creation.data.moodNote || "", run);
+    await generateImage(creation.data.drink, creation.data.moodNote || "", creation.data.creationId, run);
   };
 
   const toggleSpeech = async () => {
@@ -262,7 +295,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
     const run = runRef.current;
     setSpeech({ status: "loading", url: "", message: "正在请温柔女声读签…" });
     try {
-      const result = await createCustomSpeech({ text: creation.data.blessing, token: creation.data.speechTicket }, getSession, controller.signal);
+      const result = await createCustomSpeech({ text: creation.data.blessing, token: creation.data.speechTicket, creationId: creation.data.creationId }, getSession, controller.signal);
       if (run !== runRef.current || !result.audio) return;
       setSpeech({ status: "ready", url: result.audio, message: "" });
       audioRef.current.src = result.audio;
@@ -295,7 +328,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
         summary: creation.data.drink.summary || "",
         layers: creation.data.drink.receipt || creation.data.drink.ingredients || [],
       };
-      const frameTask = await createVideoFrameTask({ imageUrl: image.url, drink: videoDrink, moodNote: creation.data.moodNote || "" }, getSession, frameController.signal);
+      const frameTask = await createVideoFrameTask({ imageUrl: image.url, drink: videoDrink, moodNote: creation.data.moodNote || "", creationId: creation.data.creationId }, getSession, frameController.signal);
       const frameResult = frameTask.resultUrl ? frameTask : await waitForVideoTask(frameTask, getSession, frameController.signal, (progress) => {
         if (run === runRef.current) setFrame((value) => ({ ...value, progress }));
       });
@@ -308,7 +341,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
       videoController = withController();
       stage = "video";
       setVideo({ status: "loading", progress: 6, url: "", message: "阶段 2 / 2 · 正在生成 720p · 5 秒宣传片" });
-      const videoTask = await createDrinkVideoTask({ frameUrl, drink: videoDrink, moodNote: creation.data.moodNote || "" }, getSession, videoController.signal);
+      const videoTask = await createDrinkVideoTask({ frameUrl, drink: videoDrink, moodNote: creation.data.moodNote || "", creationId: creation.data.creationId }, getSession, videoController.signal);
       const videoResult = videoTask.resultUrl ? videoTask : await waitForVideoTask(videoTask, getSession, videoController.signal, (progress) => {
         if (run === runRef.current) setVideo((value) => ({ ...value, progress }));
       });
@@ -346,8 +379,41 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
         </div>
       </div>
 
+      <div className="recipe-mode-switch" role="tablist" aria-label="选择配料方式">
+        <button type="button" role="tab" aria-selected={recipeMode === "manual"} className={recipeMode === "manual" ? "active" : ""} onClick={() => setRecipeMode("manual")}>
+          <span><b>01</b><Shuffle size={18} /></span>
+          <strong>自己挑配料</strong>
+          <small>从茶底、鲜果和小料开始，亲手写一张配方</small>
+        </button>
+        <button type="button" role="tab" aria-selected={recipeMode === "mood"} className={recipeMode === "mood" ? "active" : ""} onClick={() => setRecipeMode("mood")}>
+          <span><b>02</b><WandSparkles size={18} /></span>
+          <strong>AI 按心情搭配</strong>
+          <small>先说说今天怎么了，让风味主动来回应你</small>
+        </button>
+      </div>
+
       <div className="custom-workbench">
         <div className="ingredient-drawers">
+          {recipeMode === "mood" && (
+            <section className={`mood-recipe-oracle mood-recipe-oracle--${suggestion.status}`} aria-labelledby="mood-recipe-title">
+              <div className="mood-recipe-oracle__head">
+                <span><WandSparkles size={17} /></span>
+                <div><small>MOOD-FIRST BLENDING</small><h2 id="mood-recipe-title">先说心情，再挑味道。</h2></div>
+              </div>
+              <p>AI 只会从下方真实配料目录中选择，并自动避开 0 咖、酸乳和热饮冲突。搭配后仍然可以自己调整。</p>
+              <div className="mood-recipe-oracle__field">
+                <textarea aria-label="写下心情让 AI 自动搭配配料" rows={4} maxLength={120} value={note} onChange={(event) => setNote(Array.from(event.target.value).slice(0, 120).join(""))} placeholder="例如：今天终于把一个很难的项目做完，想要一杯明亮、有庆祝感但不要太甜的饮品…" />
+                <span>{noteLength} / 120</span>
+              </div>
+              <button type="button" onClick={suggestFromMood} disabled={suggestion.status === "loading" || noteLength < 2}>
+                {suggestion.status === "loading" ? <LoaderCircle className="spin" size={18} /> : <WandSparkles size={18} />}
+                {suggestion.status === "loading" ? "正在听心情、翻配料抽屉…" : suggestion.status === "ready" ? "按这个心情再配一套" : "让 AI 替我搭配"}
+              </button>
+              {suggestion.status === "loading" && <p className="mood-recipe-oracle__status">{suggestion.message}</p>}
+              {suggestion.status === "error" && <p className="mood-recipe-oracle__status mood-recipe-oracle__status--error">{suggestion.message}</p>}
+              {suggestion.status === "ready" && <blockquote><Sparkles size={15} /><span><b>这套搭配为什么适合此刻</b>{suggestion.reason}</span></blockquote>}
+            </section>
+          )}
           {customDrinkGroups.map((group) => (
             <fieldset className="ingredient-group" key={group.id}>
               <legend><b>{group.step}</b><span>{group.title}<small>{group.hint}</small></span><em>{selection[group.id].length}/{group.max}</em></legend>
@@ -374,22 +440,22 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
           <fieldset className="ingredient-group ingredient-group--finish">
             <legend><b>07</b><span>甜度与温度<small>最后校准这杯的体感</small></span></legend>
             <div className="finish-row">
-              <div><label>甜度</label>{sweetnessOptions.map((item) => <button type="button" className={sweetness === item ? "active" : ""} key={item} onClick={() => setSweetness(item)}>{item}</button>)}</div>
-              <div><label>温度</label>{temperatureOptions.map((item) => <button type="button" className={temperature === item ? "active" : ""} key={item} onClick={() => chooseTemperature(item)}>{item}</button>)}</div>
+              <div><label>甜度</label>{sweetnessOptions.map((item) => <button type="button" aria-pressed={sweetness === item} className={sweetness === item ? "active" : ""} key={item} onClick={() => setSweetness(item)}>{item}</button>)}</div>
+              <div><label>温度</label>{temperatureOptions.map((item) => <button type="button" aria-pressed={temperature === item} className={temperature === item ? "active" : ""} key={item} onClick={() => chooseTemperature(item)}>{item}</button>)}</div>
             </div>
           </fieldset>
 
-          <div className="custom-note">
+          {recipeMode === "manual" && <div className="custom-note">
             <label htmlFor="custom-drink-note">这杯想说的话 / 此刻心情</label>
             <p>它会影响饮品命名、描述、祝福，也会进入图片和视频的创意描述。</p>
             <textarea id="custom-drink-note" rows={4} maxLength={120} value={note} onChange={(event) => setNote(Array.from(event.target.value).slice(0, 120).join(""))} placeholder="例如：终于结束忙碌的一周，想把晚风和松弛都装进杯子里…" />
             <small className={noteLength >= 108 ? "near-limit" : ""}>{noteLength} / 120</small>
-          </div>
+          </div>}
 
           {notice && <div className="constraint-notice" role="status"><AlertTriangle size={16} />{notice}</div>}
           <button type="button" className="create-drink-button" disabled={!canCreate} onClick={beginCreation}>
             {creation.status === "loading" ? <LoaderCircle className="spin" size={20} /> : <Sparkles size={20} />}
-            {creation.status === "loading" ? "正在写你的饮品签笺…" : creation.data ? "重新创作这杯" : "创造我的喜茶"}
+            {creation.status === "loading" ? "正在写你的饮品签笺…" : creation.data ? "重新创作这杯" : recipeMode === "mood" ? "用这套心情配方创作" : "创造我的喜茶"}
             <small>{selectedCount} 项配料</small>
           </button>
         </div>
@@ -453,7 +519,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
 
               {image.status === "ready" && (
                 <div className="media-lab">
-                  <div className="temporary-note"><AlertTriangle size={15} /><span><b>临时作品，建议及时保存</b><small>图片与视频 URL 仅保留约 24 小时</small></span></div>
+                  <div className="temporary-note"><Check size={15} /><span><b>作品已跟随账号保存</b><small>生成完成的图片、声音和视频会自动归档到 R2</small></span></div>
                   <div className="asset-links">
                     <a href={image.url} download={`${drink.name}.png`} target="_blank" rel="noreferrer"><Download size={15} />保存饮品图</a>
                     {!video.url && <button type="button" onClick={createVideo}><Film size={16} />制作 5 秒宣传片</button>}

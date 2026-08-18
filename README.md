@@ -1,22 +1,76 @@
 # 喜点什么？
 
-一个为喜茶 DIY 饮品生成随机搭配灵感的可爱手绘风小应用。
+一个从“今天喝什么”出发的多模态 AI 饮品创作 Demo：它可以随机推荐饮品，根据用户心情生成签语和配料建议，并为登录用户生成祝福语音、原创饮品图与 5 秒宣传片。
 
-## 本地运行
+> [!IMPORTANT]
+> 这是 **UXPA / UXDA AI 设计智能体线下课程的课堂产品代码**，用于演示如何从一个可运行的网页原型，逐步加入大模型、语音、图片、视频、登录、数据库和对象存储。它不是喜茶官方产品，也不建议未经安全、费用和内容审核就直接作为生产服务开放。
+
+课堂完整复盘：[从随机奶茶到会理解心情的多模态 AI 饮品产品](https://my.feishu.cn/wiki/UpuAwUEVNiBNnHk3XtrcLx0VnPe)
+
+## 你可以怎样使用这份代码
+
+- 只想学习前端交互：不配置第三方 API 也可以启动项目，浏览随机饮品、筛选和基础页面。
+- 想体验 AI 签语和心情推荐：配置 DeepSeek API。
+- 想体验语音、图片和视频：还需要 MiniMax、Evolink，并配置 Neon 登录。
+- 想保存用户作品：继续配置 Neon PostgreSQL 与 Cloudflare R2。
+- 想部署到线上：把所有服务端密钥放在部署平台的环境变量中，并设置正式域名、限流和费用预警。
+
+## 本地快速开始
+
+### 1. 准备环境
+
+- Node.js `20.19+` 或 `22.12+`
+- npm
+- Git
+
+### 2. 安装与启动
 
 ```bash
+git clone https://github.com/zifeixu85/xicha.git
+cd xicha
 npm install
+cp .env.example .env
 npm run dev
 ```
 
-开发服务器会同时提供 Vite 页面与同源 API，默认地址为 `http://localhost:5173`。
+打开 [http://localhost:5173](http://localhost:5173)。开发服务器会同时提供 Vite 页面与同源 API。
 
-生产构建：
+如果只查看基础随机页面，可以暂时不填写 `.env`。未配置的 AI、登录与媒体功能会不可用或返回明确的配置错误，不会自动使用仓库作者的账号和额度。
+
+### 3. 生产构建与本地预览
 
 ```bash
 npm run build
 npm run preview
 ```
+
+可用 `PORT=4173 npm run preview` 指定端口。
+
+## 需要哪些 API 产品
+
+下面的服务都需要使用你自己的账号、密钥和额度。模型名称、价格和权限可能调整，请以各平台当前控制台及官方文档为准。
+
+| 产品 | 在本项目中的用途 | 是否必需 | 官方入口 |
+|---|---|---|---|
+| DeepSeek API | 随机签语、按心情推荐、自创饮品文案、AI 配料建议 | AI 文本功能必需 | [API 文档](https://api-docs.deepseek.com/zh-cn/) |
+| MiniMax 开放平台 | 把祝福语合成为 MP3 语音 | 语音播放必需 | [同步语音合成](https://platform.minimaxi.com/docs/api-reference/speech-t2a-http) |
+| Evolink.ai | 生成 1:1 饮品图、扩展 16:9 首帧、生成 720p / 5 秒视频 | 图片和视频必需 | [GPT Image 2](https://evolink.ai/docs/cn/api-manual/image-series/gpt-image-2/gpt-image-2-beta-image-generation) · [HappyHorse 1.1](https://evolink.ai/docs/cn/api-manual/video-series/happyhorse1.1/happyhorse-1.1-image-to-video) |
+| Neon | 邮箱登录、JWT/JWKS 鉴权、收藏、作品记录和 PostgreSQL | 登录与用户数据必需 | [Neon 文档](https://neon.com/docs/introduction) |
+| Cloudflare R2 | 长期保存图片、音频和视频，避免供应商临时链接过期 | 作品媒体保存必需 | [S3 兼容 API 入门](https://developers.cloudflare.com/r2/get-started/s3/) |
+
+项目当前按课堂需求固定使用 `deepseek-v4-pro`、MiniMax `speech-2.8-hd`、Evolink `gpt-image-2-beta` 与 `happyhorse-1.1-image-to-video`。如果你的账号没有对应模型权限，请先在供应商控制台确认可用模型，再修改服务端常量；不要让浏览器传入任意模型名。
+
+### 推荐的配置顺序
+
+1. 先不配置 API，确认基础页面可以运行。
+2. 配置 `DEEPSEEK_API_KEY`，测试签语与心情推荐。
+3. 配置 Neon Auth、Data API 和 `DATABASE_URL`，运行数据库迁移并测试两个账号的数据隔离。
+4. 配置 `MINIMAX_API_KEY`，测试登录后的语音播放。
+5. 配置 `EVOLINK_API_KEY` 与任务签名密钥，先测试图片，再测试视频，避免一次产生过多费用。
+6. 最后配置私有 Cloudflare R2 桶，让生成媒体进入用户作品记录。
+
+> [!WARNING]
+> 不要把真实 API Key 写入源码、README、截图、课堂群聊、录屏或 Git 提交。只写入被忽略的 `.env`，线上写入部署平台的服务端环境变量。任何曾经公开展示过的测试密钥都应该撤销并重新生成。
 
 ## 功能
 
@@ -35,12 +89,38 @@ npm run preview
 - 内置菜单资料来源与门店可售提示
 - “随机灵感 / 自创一杯”双模式切换；自创模式仅登录用户可用
 - 自创配方桌提供 40+ 项茶底、乳基底、鲜果、香气、小料和云顶选择，并校验数量、0 咖与高酸鲜乳等冲突
+- 自创配方桌支持“自己挑配料 / AI 按心情搭配”双路径；心情模式只从配料白名单选择，自动填入抽屉后仍可手动微调
 - 自创结果包含原创饮品名、风味摘要、标签、配料小票和祝福，明确标记为“AI 概念特调”
 - 自创饮品图使用异步任务轮询、进度骨架和失败重试；完成后可继续制作 16:9、720p、5 秒宣传片
-- 图片与视频标注约 24 小时有效，提供浏览器支持范围内的保存、打开和下载入口
+- 自创饮品完成后的图片、祝福语音与视频自动转存到 Cloudflare R2，并按登录账号归档
 - 模式切换、重新创作和组件卸载会终止旧请求、轮询及音视频，避免旧作品覆盖新结果
 
-## Neon 登录与云端收藏
+## 完整功能配置
+
+### 环境变量速查
+
+| 环境变量 | 从哪里获得 | 用途 |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | DeepSeek 开放平台 | 文本签语、推荐和自创饮品 |
+| `MINIMAX_API_KEY` | MiniMax 开放平台 | 祝福语音 |
+| `EVOLINK_API_KEY` | Evolink.ai | 图片、首帧和视频任务 |
+| `VITE_NEON_AUTH_URL` | Neon Auth | 浏览器登录入口 |
+| `VITE_NEON_DATA_API_URL` | Neon Data API | 浏览器收藏数据访问 |
+| `NEON_AUTH_URL` | 与 Auth URL 相同 | 服务端读取 JWKS 并校验 JWT |
+| `DATABASE_URL` | Neon 项目连接信息 | 数据库迁移与作品记录读写 |
+| `VIDEO_TASK_SIGNING_SECRET` | 自己生成 | 为图片/视频轮询凭证签名 |
+| `STORAGE_ENDPOINT` | Cloudflare R2 | S3 兼容 API 地址 |
+| `STORAGE_ACCESS_KEY` | Cloudflare R2 API Token | R2 Access Key ID |
+| `STORAGE_SECRET_KEY` | Cloudflare R2 API Token | R2 Secret Access Key |
+| `STORAGE_BUCKET` | 自己创建的 R2 桶 | 保存生成媒体 |
+
+生成本地任务签名密钥：
+
+```bash
+openssl rand -base64 32
+```
+
+### Neon 登录、数据库与用户数据
 
 项目使用 Neon Auth 管理账号与会话，使用 Neon Data API 读写收藏，并在 PostgreSQL 中通过 RLS 保证每个用户只能访问自己的数据。
 
@@ -65,6 +145,12 @@ VITE_NEON_AUTH_URL=你的 Auth URL
 VITE_NEON_DATA_API_URL=你的 Data API URL
 NEON_AUTH_URL=同一个 Auth URL（服务端）
 DATABASE_URL=你的 pooled connection string
+STORAGE_ENDPOINT=https://你的账号ID.r2.cloudflarestorage.com
+STORAGE_REGION=auto
+STORAGE_ACCESS_KEY=你的 R2 Access Key ID
+STORAGE_SECRET_KEY=你的 R2 Secret Access Key
+STORAGE_BUCKET=你的私有桶名
+STORAGE_DOMAIN=可选的自定义媒体域名
 DEEPSEEK_API_KEY=你的 DeepSeek API Key
 MINIMAX_API_KEY=你的 MiniMax API Key
 EVOLINK_API_KEY=你的 Evolink API Key
@@ -73,9 +159,43 @@ VIDEO_TASK_SIGNING_SECRET=随机长字符串
 
 `VITE_` 开头的两个值是浏览器可用的公开服务地址。`NEON_AUTH_URL` 是同一个 Neon Auth 公开地址的服务端副本，用于定位 JWKS；本地未设置时会回退到 `VITE_NEON_AUTH_URL`，生产环境建议显式设置。`DATABASE_URL` 含数据库密码，只能放在本地或部署平台的服务端环境变量中，不能改名为 `VITE_DATABASE_URL`。
 
-`DEEPSEEK_API_KEY`、`MINIMAX_API_KEY` 和 `EVOLINK_API_KEY` 都只能配置在服务端。浏览器请求同源的 `/api/recommendation`、`/api/blessing`、`/api/speech` 及自创饮品媒体 API，服务端再调用 `deepseek-v4-pro`、MiniMax `speech-2.8-hd` 和 Evolink `gpt-image-2-beta`，因此 Key 不会进入前端构建产物。语音只在用户点击播放后生成，MiniMax 返回的临时 URL 仅缓存于当前页面、当前签语；重新摇签会终止旧请求并清空音频。部署到 Vercel 时，同样需要配置这些服务端环境变量，以及用于 JWKS 验签的 `NEON_AUTH_URL`。
+`DEEPSEEK_API_KEY`、`MINIMAX_API_KEY`、`EVOLINK_API_KEY` 和 `STORAGE_*` 都只能配置在服务端。浏览器请求同源 API，服务端调用模型并把完成的自创媒体立即转存到 R2，因此所有 Key 都不会进入前端构建产物。作品记录只保存 R2 对象键，读取时先验证 Neon 登录账号，再签发 15 分钟有效的 GET 地址。不要使用公开的 `r2.dev` 域名作为权限控制；正式使用时应关闭桶的公开开发 URL。
 
-祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本；这个 HMAC 凭证与登录校验是两道独立检查。心情输入第一版只随本次请求发送，不写入账号数据库或本地存储。
+祝福接口会为当前签语签发短时播放凭证，语音接口只接受与该凭证匹配且不超过 120 字的文本；这个 HMAC 凭证与登录校验是两道独立检查。随机摇签的心情只随本次请求发送；自创饮品的心情会作为该账号作品记录的一部分保存。
+
+### 3. 配置 Cloudflare R2
+
+1. 在 Cloudflare 控制台进入 **R2 Object Storage**，创建一个私有桶。
+2. 创建只作用于该桶的 **Object Read & Write** API Token。
+3. 保存 Access Key ID、Secret Access Key 和 S3 API Endpoint；Secret 通常只显示一次。
+4. 把这些值写入本地 `.env` 的 `STORAGE_*` 字段。
+5. 不要依赖公开 `r2.dev` 地址做用户权限控制。项目会在服务端验证登录用户并签发短时 GET URL。
+
+R2 的 S3 Endpoint 格式通常为：
+
+```text
+https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+```
+
+详细步骤见 [Cloudflare R2 S3 API 入门](https://developers.cloudflare.com/r2/get-started/s3/) 和 [R2 API Token](https://developers.cloudflare.com/r2/api/tokens/)。
+
+### 4. 执行数据库迁移
+
+确保已经开启 Neon Auth，并配置好 `DATABASE_URL`：
+
+```bash
+npm run db:migrate
+```
+
+迁移脚本会依次执行 `migrations/` 下的 SQL，创建收藏表、作品表与媒体表，并配置按 `auth.user_id()` 隔离的 RLS 策略。
+
+### 5. 启动并验证账号隔离
+
+```bash
+npm run dev
+```
+
+注册两个测试账号，分别收藏或创作不同饮品；互相登录时不应看到对方的数据。部署到 Vercel 等平台时，需要配置两个 `VITE_NEON_*` 环境变量、`NEON_AUTH_URL` 和 `DATABASE_URL`，并将正式域名加入 Neon Auth Allowed origins。`DATABASE_URL` 既用于迁移，也用于作品记录和媒体元数据的服务端读写。
 
 ### 多模态 API 鉴权契约
 
@@ -109,7 +229,7 @@ if (!auth) return;
 1. `POST /api/generate-video-frame` 使用固定的 `gpt-image-2-beta`、`size: "16:9"`、`resolution: "1K"`，对已完成的方形饮品图做编辑与扩图。
 2. 浏览器用 `GET /api/video-task` 查询首帧任务；完成后取得 `resultUrl`。
 3. `POST /api/generate-drink-video` 使用该 16:9 首帧，固定调用 `happyhorse-1.1-image-to-video`、`quality: "720p"`、`duration: 5`。视频请求不发送 `aspect_ratio`，比例继承首帧。
-4. 浏览器继续查询视频任务，并在完成后尽快保存 `resultUrl`；Evolink 视频结果地址仅临时有效。
+4. 浏览器继续查询视频任务；完成后服务端把临时结果转存至 R2，并将对象关联到当前账号的作品记录。
 
 两个创建接口都只接受以下业务字段，不接受客户端覆盖模型、画幅、清晰度、时长、回调地址或用户身份：
 
@@ -169,24 +289,6 @@ queryTask(taskId, "image" | "video", apiKey, options)
 
 所有自创生成请求都会通过同源 auth fetch helper 在每次请求前重新读取当前 session JWT，并发送 `Authorization: Bearer <session token>`；服务端对缺失、伪造、过期或匿名 token 均拒绝。图片和视频查询凭证还会额外绑定任务、类型和已验证用户。
 
-### 3. 创建收藏表与 RLS
-
-确保已经先开启 Neon Auth，然后执行：
-
-```bash
-npm run db:migrate
-```
-
-迁移脚本会创建 `favorite_recipes` 表、唯一约束、授权和三条按 `auth.user_id()` 隔离的 RLS 策略。SQL 源文件位于 `migrations/001_user_favorites.sql`，也可以在 Neon SQL Editor 中直接执行。
-
-### 4. 启动并验证
-
-```bash
-npm run dev
-```
-
-注册两个测试账号，分别收藏不同饮品；互相登录时不应看到对方的收藏。部署到 Vercel 等平台时，需要配置两个 `VITE_NEON_*` 环境变量，并将正式域名加入 Neon Auth Allowed origins。部署环境不需要 `DATABASE_URL`，除非在那里运行迁移。
-
 ## 饮品图片异步 API
 
 Express 开发服务器和 Vercel Functions 提供相同的两个端点。所有响应（包括错误）都带 `Cache-Control: no-store`；错误使用中文安全文案，不转发 Evolink 的原始错误详情。上游字段约束以 [Evolink GPT Image 2 Beta 官方文档](https://evolink.ai/docs/cn/api-manual/image-series/gpt-image-2/gpt-image-2-beta-image-generation) 为准。
@@ -226,7 +328,7 @@ Express 开发服务器和 Vercel Functions 提供相同的两个端点。所有
 
 `GET /api/media-task?taskId=task-unified-...&pollToken=...`
 
-返回 HTTP 200。`status` 为 `pending`、`processing`、`completed` 或 `failed`；完成后 `results` 含唯一的 HTTPS 图片地址，失败时包含中文 `error`。结果 URL 由 Evolink 托管且仅约 24 小时有效，消费方应及时转存，不能把它当永久资源。
+返回 HTTP 200。`status` 为 `pending`、`processing`、`completed` 或 `failed`；带有 `creationId` 的自创任务完成后，服务端会先将图片转存到 R2，再在 `results` 中返回短时签名读取地址。
 
 ### 认证与限流集成
 

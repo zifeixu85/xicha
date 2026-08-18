@@ -7,6 +7,9 @@ import videoHandler from "../api/generate-drink-video.js";
 import mediaTaskHandler from "../api/media-task.js";
 import speechHandler from "../api/speech.js";
 import videoTaskHandler from "../api/video-task.js";
+import creationsHandler from "../api/creations.js";
+import importCreationHandler from "../api/import-creation.js";
+import suggestIngredientsHandler from "../api/suggest-custom-ingredients.js";
 
 const createResponse = () => ({
   statusCode: 200,
@@ -26,6 +29,9 @@ const protectedEntries = [
   ["video frame", frameHandler, { method: "POST", body: {} }],
   ["video generation", videoHandler, { method: "POST", body: {} }],
   ["video polling", videoTaskHandler, { method: "GET", query: {} }],
+  ["creation library", creationsHandler, { method: "GET", query: {} }],
+  ["creation import", importCreationHandler, { method: "POST", body: {} }],
+  ["mood ingredient suggestion", suggestIngredientsHandler, { method: "POST", body: {} }],
 ];
 
 for (const [name, handler, request] of protectedEntries) {
