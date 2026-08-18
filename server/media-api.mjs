@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { generateDrinkImage, queryDrinkImage } from "./drink-image.mjs";
 import { requireAuthenticatedUser } from "./auth.mjs";
 import { ensureCreationOwner, persistCreationMedia } from "./creation-store.mjs";
+import { isPublicDemoMode, sendPublicDemoMediaDisabled } from "./public-demo.mjs";
 
 const POLL_TOKEN_TTL_MS = 24 * 60 * 60_000;
 
@@ -150,12 +151,14 @@ export const createGenerateDrinkImageHandler = ({
   signingSecret = process.env.VIDEO_TASK_SIGNING_SECRET || apiKey,
   fetchImpl = globalThis.fetch,
   now = Date.now,
+  demoMode = isPublicDemoMode,
 } = {}) => async (request, response) => {
   setNoStore(response);
   if (request.method !== "POST") {
     response.setHeader("Allow", "POST");
     return response.status(405).json({ error: "只支持 POST 请求", code: "method_not_allowed" });
   }
+  if (demoMode()) return sendPublicDemoMediaDisabled(response);
 
   try {
     const userId = await authenticate(request, response, authenticateRequest);
@@ -183,12 +186,14 @@ export const createMediaTaskHandler = ({
   signingSecret = process.env.VIDEO_TASK_SIGNING_SECRET || apiKey,
   fetchImpl = globalThis.fetch,
   now = Date.now,
+  demoMode = isPublicDemoMode,
 } = {}) => async (request, response) => {
   setNoStore(response);
   if (request.method !== "GET") {
     response.setHeader("Allow", "GET");
     return response.status(405).json({ error: "只支持 GET 请求", code: "method_not_allowed" });
   }
+  if (demoMode()) return sendPublicDemoMediaDisabled(response);
 
   try {
     const userId = await authenticate(request, response, authenticateRequest);

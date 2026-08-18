@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import express from "express";
 import { requireAuthenticatedUser } from "./auth.mjs";
 import { ensureCreationOwner, persistCreationMedia } from "./creation-store.mjs";
+import { isPublicDemoMode, sendPublicDemoMediaDisabled } from "./public-demo.mjs";
 import {
   VideoServiceError,
   createVideoFrameTask,
@@ -81,6 +82,7 @@ export const createVideoHandlers = ({
   signingSecret = process.env.VIDEO_TASK_SIGNING_SECRET || apiKey,
   clientOptions = {},
   now = Date.now,
+  demoMode = isPublicDemoMode,
 } = {}) => {
   const authenticate = async (request, response) => {
     const principal = await authGuard(request, response);
@@ -90,6 +92,7 @@ export const createVideoHandlers = ({
   const create = (operation) => async (request, response) => {
     response.setHeader("Cache-Control", "no-store, max-age=0");
     response.setHeader("Pragma", "no-cache");
+    if (demoMode()) return sendPublicDemoMediaDisabled(response);
     try {
       const principalId = await authenticate(request, response);
       if (!principalId) return undefined;
@@ -114,6 +117,7 @@ export const createVideoHandlers = ({
   const getTask = async (request, response) => {
     response.setHeader("Cache-Control", "no-store, max-age=0");
     response.setHeader("Pragma", "no-cache");
+    if (demoMode()) return sendPublicDemoMediaDisabled(response);
     try {
       const principalId = await authenticate(request, response);
       if (!principalId) return undefined;

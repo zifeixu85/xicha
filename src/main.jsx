@@ -41,7 +41,10 @@ import {
 } from "./neon";
 import { authFetch, AuthRequiredError } from "./auth-fetch";
 import { categoryMeta, recipes, sources } from "./recipes";
+import { publicDemoMode } from "./public-demo";
 import "./styles.css";
+
+const repositoryUrl = "https://github.com/zifeixu85/xicha";
 
 const moods = [
   { id: "all", label: "随便来杯", doodle: "✦" },
@@ -693,10 +696,12 @@ function App({ auth }) {
             <span>小本本</span>
             {saved.length > 0 && <em>{saved.length}</em>}
           </button>
-          <button className="text-button" onClick={() => setSheet(user ? "creations" : "auth")}>
-            <Beaker size={17} />
-            <span>AI 作品</span>
-          </button>
+          {!publicDemoMode && (
+            <button className="text-button" onClick={() => setSheet(user ? "creations" : "auth")}>
+              <Beaker size={17} />
+              <span>AI 作品</span>
+            </button>
+          )}
           <button className="round-button" onClick={() => setSheet("sources")} aria-label="资料说明">
             <Info size={19} />
           </button>
@@ -704,6 +709,13 @@ function App({ auth }) {
       </header>
 
       <main id="top">
+        {publicDemoMode && (
+          <aside className="public-demo-banner" role="note">
+            <LockKeyhole size={18} />
+            <span><b>线上课堂演示版</b>登录注册与 DeepSeek 文本能力可用；图片、视频、音频生成暂时冻结。</span>
+            <a href={repositoryUrl} target="_blank" rel="noreferrer">让 AI 帮我本地运行 <ArrowUpRight size={15} /></a>
+          </aside>
+        )}
         <nav className="mode-switch" aria-label="选择创作模式">
           <button type="button" className={mode === "random" ? "active" : ""} onClick={() => switchMode("random")}><Shuffle size={16} />随机灵感<small>替我摇一杯</small></button>
           <button type="button" className={mode === "custom" ? "active" : ""} onClick={() => switchMode("custom")}><Beaker size={16} />自创一杯<small>{user ? "我的配方桌" : "登录后解锁"}</small>{!user && <LockKeyhole size={13} />}</button>
@@ -807,7 +819,11 @@ function App({ auth }) {
               <p>{aiBlessing.text}</p>
               {aiBlessing.time && <time>{aiBlessing.time}</time>}
               {aiBlessing.status === "ready" && currentBlessing.current === aiBlessing.text && (
-                <div className="speech-player">
+                publicDemoMode ? (
+                  <div className="speech-player speech-player--disabled">
+                    <LockKeyhole size={15} />线上演示版暂不生成语音
+                  </div>
+                ) : <div className="speech-player">
                   <audio
                     ref={audioRef}
                     preload="none"
@@ -898,7 +914,7 @@ function App({ auth }) {
         </section>
           </>
         ) : (
-          <CustomDrinkStudio user={user} getSession={getLatestSession} onLogin={() => setSheet("auth")} />
+          <CustomDrinkStudio user={user} getSession={getLatestSession} onLogin={() => setSheet("auth")} mediaEnabled={!publicDemoMode} />
         )}
       </main>
 

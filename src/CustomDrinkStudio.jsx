@@ -42,7 +42,7 @@ const initialMedia = { status: "idle", progress: 0, url: "", message: "" };
 
 const mediaUrl = (payload) => payload.url || payload.resultUrl || payload.results?.[0] || payload.output?.url || payload.result?.url || "";
 
-function LockedPreview({ onLogin }) {
+function LockedPreview({ onLogin, mediaEnabled }) {
   return (
     <section className="custom-lock" aria-labelledby="custom-lock-title">
       <div className="custom-lock__preview" aria-hidden="true">
@@ -64,7 +64,7 @@ function LockedPreview({ onLogin }) {
         <span className="lock-seal"><LockKeyhole size={25} /></span>
         <span className="eyebrow">MEMBERS' RECIPE DESK</span>
         <h2 id="custom-lock-title">这张配方纸，<br />等你签名。</h2>
-        <p>登录后自由挑选茶底、鲜果、香气与口感，让 AI 为此刻命名，并制作专属饮品图和 5 秒宣传片。</p>
+        <p>登录后自由挑选茶底、鲜果、香气与口感，让 AI 为此刻命名{mediaEnabled ? "，并制作专属饮品图和 5 秒宣传片" : "。线上演示版暂不生成媒体作品"}。</p>
         <button type="button" onClick={onLogin}><LockKeyhole size={17} />登录，开始自创</button>
         <small>你的心情仅用于本次创作 · 媒体作品 24 小时有效</small>
       </div>
@@ -86,7 +86,7 @@ function ProgressTicket({ icon, title, detail, progress, status, onRetry }) {
   );
 }
 
-export default function CustomDrinkStudio({ user, getSession, onLogin }) {
+export default function CustomDrinkStudio({ user, getSession, onLogin, mediaEnabled = true }) {
   const [selection, setSelection] = useState(makeEmptySelection);
   const [sweetness, setSweetness] = useState("微微甜");
   const [temperature, setTemperature] = useState("少冰");
@@ -266,7 +266,11 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
       const creationData = { ...data, moodNote: creationNote };
       setCreation({ status: "ready", data: creationData, message: "" });
       setSpeech({ status: "idle", url: "", message: "" });
-      await generateImage(data.drink, creationNote, data.creationId, run);
+      if (mediaEnabled) {
+        await generateImage(data.drink, creationNote, data.creationId, run);
+      } else {
+        setImage({ status: "disabled", progress: 0, url: "", message: "线上演示版暂不生成饮品图" });
+      }
     } catch (error) {
       if (error.name !== "AbortError" && run === runRef.current) {
         reopenLoginIfNeeded(error);
@@ -278,12 +282,14 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
   };
 
   const retryImage = async () => {
+    if (!mediaEnabled) return flash("线上演示版暂不生成图片");
     if (!user || !creation.data?.drink) return onLogin();
     const run = runRef.current;
     await generateImage(creation.data.drink, creation.data.moodNote || "", creation.data.creationId, run);
   };
 
   const toggleSpeech = async () => {
+    if (!mediaEnabled) return flash("线上演示版暂不生成音频");
     if (!user) return onLogin();
     if (speech.status === "playing") return audioRef.current?.pause();
     if (speech.url) {
@@ -312,6 +318,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
   };
 
   const createVideo = async () => {
+    if (!mediaEnabled) return flash("线上演示版暂不生成视频");
     if (!user) return onLogin();
     if (!image.url || !creation.data?.drink) return;
     stopAll(false);
@@ -360,7 +367,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
     }
   };
 
-  if (!user) return <LockedPreview onLogin={onLogin} />;
+  if (!user) return <LockedPreview onLogin={onLogin} mediaEnabled={mediaEnabled} />;
 
   const drink = creation.data?.drink;
   const receipt = drink?.receipt || drink?.ingredients || [];
@@ -371,7 +378,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
         <div>
           <span className="eyebrow"><TicketCheck size={15} /> CUSTOM RECIPE DESK</span>
           <h1>把此刻，<em>调成一杯。</em></h1>
-          <p>这是一杯 AI 概念特调，不代表门店一定可售；尽管大胆，别忘了给风味留白。</p>
+          <p>这是一杯 AI 概念特调，不代表门店一定可售；{mediaEnabled ? "尽管大胆，别忘了给风味留白。" : "线上版保留 DeepSeek 文案创作，媒体生成暂时冻结。"}</p>
         </div>
         <div className="desk-tools">
           <button type="button" onClick={clearDesk}><Eraser size={16} />清空</button>
@@ -447,7 +454,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
 
           {recipeMode === "manual" && <div className="custom-note">
             <label htmlFor="custom-drink-note">这杯想说的话 / 此刻心情</label>
-            <p>它会影响饮品命名、描述、祝福，也会进入图片和视频的创意描述。</p>
+            <p>它会影响饮品命名、描述与祝福{mediaEnabled ? "，也会进入图片和视频的创意描述" : "；本地完整版还会影响图片与视频"}。</p>
             <textarea id="custom-drink-note" rows={4} maxLength={120} value={note} onChange={(event) => setNote(Array.from(event.target.value).slice(0, 120).join(""))} placeholder="例如：终于结束忙碌的一周，想把晚风和松弛都装进杯子里…" />
             <small className={noteLength >= 108 ? "near-limit" : ""}>{noteLength} / 120</small>
           </div>}
@@ -490,7 +497,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
             <div className="creation-result">
               <div className="concept-ribbon">AI 概念特调 · 非门店在售承诺</div>
               <div className={`generated-visual generated-visual--${image.status}`}>
-                {image.url ? <img src={image.url} alt={`${drink.name} AI 概念饮品图`} /> : <div className="image-skeleton"><span /><i /><b>正在显影</b></div>}
+                {image.url ? <img src={image.url} alt={`${drink.name} AI 概念饮品图`} /> : mediaEnabled ? <div className="image-skeleton"><span /><i /><b>正在显影</b></div> : <div className="image-skeleton image-skeleton--disabled"><LockKeyhole size={24} /><b>线上版不生成图片</b><small>本地配置模型后可解锁</small></div>}
                 <span className="visual-seal">自<br />创</span>
               </div>
               {image.status === "loading" && <ProgressTicket icon={<ImageIcon size={20} />} title="饮品图正在显影" detail={image.message} progress={image.progress} status="loading" />}
@@ -504,11 +511,13 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
               <div className="custom-blessing">
                 <span><Sparkles size={14} />写给此刻的签</span>
                 <p>{creation.data.blessing}</p>
-                <audio ref={audioRef} preload="none" onPlay={() => setSpeech((value) => ({ ...value, status: "playing", message: "" }))} onPause={() => setSpeech((value) => value.status === "playing" ? { ...value, status: "paused" } : value)} onEnded={() => setSpeech((value) => ({ ...value, status: "ended" }))} />
-                <button type="button" className="custom-speech-button" disabled={speech.status === "loading"} onClick={toggleSpeech} aria-label={speech.status === "playing" ? "暂停自创祝福" : speech.url ? "播放自创祝福" : "生成并播放自创祝福"}>
-                  {speech.status === "loading" ? <LoaderCircle className="spin" size={15} /> : speech.status === "playing" ? <Pause size={15} /> : speech.url ? <Play size={15} /> : <Volume2 size={15} />}
-                  {speech.status === "loading" ? "正在生成语音" : speech.status === "playing" ? "暂停" : speech.url ? "播放祝福" : "听听这张签"}
-                </button>
+                {mediaEnabled ? <>
+                  <audio ref={audioRef} preload="none" onPlay={() => setSpeech((value) => ({ ...value, status: "playing", message: "" }))} onPause={() => setSpeech((value) => value.status === "playing" ? { ...value, status: "paused" } : value)} onEnded={() => setSpeech((value) => ({ ...value, status: "ended" }))} />
+                  <button type="button" className="custom-speech-button" disabled={speech.status === "loading"} onClick={toggleSpeech} aria-label={speech.status === "playing" ? "暂停自创祝福" : speech.url ? "播放自创祝福" : "生成并播放自创祝福"}>
+                    {speech.status === "loading" ? <LoaderCircle className="spin" size={15} /> : speech.status === "playing" ? <Pause size={15} /> : speech.url ? <Play size={15} /> : <Volume2 size={15} />}
+                    {speech.status === "loading" ? "正在生成语音" : speech.status === "playing" ? "暂停" : speech.url ? "播放祝福" : "听听这张签"}
+                  </button>
+                </> : <small className="media-disabled-note"><LockKeyhole size={13} />线上演示版暂不生成语音</small>}
                 {speech.message && <small className="speech-message">{speech.message}</small>}
               </div>
               <div className="custom-receipt">
@@ -517,7 +526,7 @@ export default function CustomDrinkStudio({ user, getSession, onLogin }) {
                 <footer><span><small>甜度</small>{drink.sweetness || sweetness}</span><span><small>温度</small>{drink.temperature || temperature}</span></footer>
               </div>
 
-              {image.status === "ready" && (
+              {mediaEnabled && image.status === "ready" && (
                 <div className="media-lab">
                   <div className="temporary-note"><Check size={15} /><span><b>作品已跟随账号保存</b><small>生成完成的图片、声音和视频会自动归档到 R2</small></span></div>
                   <div className="asset-links">

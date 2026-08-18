@@ -14,6 +14,7 @@ import { createVideoRouter } from "./server/video-api.mjs";
 import { createCustomDrinkHandler, createImportCreationHandler, createListCreationsHandler } from "./server/creation-api.mjs";
 import { persistCreationMedia } from "./server/creation-store.mjs";
 import { createCustomIngredientSuggestionHandler } from "./server/custom-drink-suggestion-api.mjs";
+import { isPublicDemoMode, sendPublicDemoMediaDisabled } from "./server/public-demo.mjs";
 
 const app = express();
 const port = Number(process.env.PORT) || 5173;
@@ -78,6 +79,7 @@ app.post("/api/recommendation", async (request, response) => {
 
 app.post("/api/speech", async (request, response) => {
   response.setHeader("Cache-Control", "no-store, max-age=0");
+  if (isPublicDemoMode()) return sendPublicDemoMediaDisabled(response);
   const auth = await requireAuthenticatedUser(request, response);
   if (!auth) return;
 

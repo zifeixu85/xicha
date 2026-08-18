@@ -7,6 +7,11 @@
 
 课堂完整复盘：[从随机奶茶到会理解心情的多模态 AI 饮品产品](https://my.feishu.cn/wiki/UpuAwUEVNiBNnHk3XtrcLx0VnPe)
 
+线上课堂 Demo：[https://xicha-opal.vercel.app](https://xicha-opal.vercel.app)
+
+> [!NOTE]
+> 线上 Demo 是费用安全的课堂展示版：可以查看完整样式与交互，注册 / 登录，并使用 DeepSeek 生成签语、心情推荐、配料建议和自创饮品文案；图片、视频、音频生成暂时冻结。完整多模态能力请把本仓库交给 AI 编程助手，让它在你的电脑上运行，再配置你自己的 API。
+
 ## 你可以怎样使用这份代码
 
 - 只想学习前端交互：不配置第三方 API 也可以启动项目，浏览随机饮品、筛选和基础页面。
@@ -15,7 +20,28 @@
 - 想保存用户作品：继续配置 Neon PostgreSQL 与 Cloudflare R2。
 - 想部署到线上：把所有服务端密钥放在部署平台的环境变量中，并设置正式域名、限流和费用预警。
 
-## 本地快速开始
+## 最省事的本地使用方式：把任务交给 AI
+
+不熟悉 Git 或命令行也没关系。打开 Codex、Claude Code、Cursor 等可以操作本机文件与终端的 AI 编程助手，把下面整段提示词发给它：
+
+```text
+请帮我在本机运行这个课堂项目：https://github.com/zifeixu85/xicha
+
+请你直接完成克隆、安装、配置检查、测试和启动，不要只给我教程。要求：
+1. 先检查 Node.js 是否满足 20.19+ 或 22.12+，不满足时告诉我最安全的安装方式。
+2. 把仓库克隆到一个新的 xicha 文件夹；如果已经存在，先检查状态，不要覆盖我的文件。
+3. 阅读 README.md、package.json 和 .env.example，然后执行 npm install。
+4. 复制 .env.example 为仅在本机使用的 .env；不要把任何密钥写进源码、聊天回复或 Git 提交。
+5. 先不配置付费 API，执行 npm test、npm run build 和 npm run dev，确认基础界面可运行。
+6. 把本地访问地址发给我。如果出错，请继续排查并修复到可以打开为止。
+7. 接着问我想启用哪一种能力：DeepSeek 文本、Neon 登录、MiniMax 语音、Evolink 图片/视频、Cloudflare R2 存储。一次只启用一种，只向我索取当前必需的配置。
+8. 只有我确认 Neon 已准备好后才执行 npm run db:migrate；不要替我创建付费资源或公开部署。
+9. 每完成一种能力，都实际测试一次，并用产品效果而不是代码术语告诉我结果。
+```
+
+这段提示词的目标不是让 AI “教你敲命令”，而是让它成为你的本地搭建助手。你只需要决定要什么产品能力，并从对应平台创建自己的账号和密钥。
+
+## 手动本地快速开始（给熟悉命令行的同学）
 
 ### 1. 准备环境
 
@@ -45,6 +71,28 @@ npm run preview
 ```
 
 可用 `PORT=4173 npm run preview` 指定端口。
+
+生产构建默认进入线上课堂演示模式，因此 `npm run preview` 会冻结图片、视频和音频。要在受控的私有部署中启用完整媒体能力，需要显式设置 `VITE_PUBLIC_DEMO_MODE=false`，并配置相应服务端密钥；日常本地完整体验请直接使用 `npm run dev`。
+
+## 线上 Demo 的安全边界
+
+当前代码在前端与服务端都冻结了线上媒体功能。生产环境和 Vercel 默认启用课堂演示模式，即使有人绕过按钮直接请求 API，也会得到 `403 PUBLIC_DEMO_MEDIA_DISABLED`，不会调用付费媒体模型。
+
+Vercel 中建议保留：
+
+- `DEEPSEEK_API_KEY`：文本签语、心情推荐、配料建议与自创文案。
+- `VITE_NEON_AUTH_URL`、`VITE_NEON_DATA_API_URL`、`NEON_AUTH_URL`：注册、登录与鉴权。
+- `DATABASE_URL`：自创文本作品和用户数据需要数据库时保留。
+- 可选设置 `VITE_PUBLIC_DEMO_MODE=true`：把当前部署意图写得更明确；不设置时生产环境也默认冻结。
+
+Vercel 中可以删除或禁用：
+
+- `MINIMAX_API_KEY`
+- `EVOLINK_API_KEY`
+- `VIDEO_TASK_SIGNING_SECRET`
+- `STORAGE_ENDPOINT`、`STORAGE_REGION`、`STORAGE_ACCESS_KEY`、`STORAGE_SECRET_KEY`、`STORAGE_BUCKET`、`STORAGE_DOMAIN`
+
+所以不建议“只留下 DeepSeek”。如果还要注册登录，Neon 的公开地址、服务端鉴权地址以及实际使用到的数据库连接仍应保留。删掉媒体变量是控制费用的第二道保险，代码中的服务端开关才是防止接口被直接调用的第一道边界。
 
 ## 需要哪些 API 产品
 
@@ -101,6 +149,7 @@ npm run preview
 
 | 环境变量 | 从哪里获得 | 用途 |
 |---|---|---|
+| `VITE_PUBLIC_DEMO_MODE` | 自己设置 `true` / `false` | 显式冻结或开放媒体功能；生产环境默认冻结 |
 | `DEEPSEEK_API_KEY` | DeepSeek 开放平台 | 文本签语、推荐和自创饮品 |
 | `MINIMAX_API_KEY` | MiniMax 开放平台 | 祝福语音 |
 | `EVOLINK_API_KEY` | Evolink.ai | 图片、首帧和视频任务 |
